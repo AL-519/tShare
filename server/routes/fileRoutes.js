@@ -3,42 +3,38 @@ const multer = require('multer');
 const {
   uploadFile,
   getFileMetadata,
-  downloadFile,
   deleteFile,
   getMySharedFiles,
-  checkStreamRequest,
-  receiveStreamChunk,
+  handleSwarmHeartbeat,
+  getSwarmStatus,
+  requestPiece,
+  getPendingPieceRequests,
+  servePiece,
 } = require('../controllers/fileController');
 const { uploadLimiter, lookupLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
-// Configure multer memory storage so file buffer is available for Local or ImageKit upload
-const maxFileSizeMb = parseInt(process.env.MAX_FILE_SIZE_MB || '200', 10);
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: maxFileSizeMb * 1024 * 1024, // MB to bytes
-  },
-});
+// Parse form fields without buffering files in RAM (files stay in browser IndexedDB)
+const uploadParser = multer();
 
-// Upload route
-router.post('/upload', uploadLimiter, upload.single('file'), uploadFile);
+// 1. Torrent Metadata Upload route (zero server disk & zero RAM overhead)
+router.post('/upload', uploadLimiter, uploadParser.none(), uploadFile);
 
-// Stream relay endpoints for device-local storage peer transfer
-router.get('/stream-check/:code', checkStreamRequest);
-router.post('/stream-chunk/:code', receiveStreamChunk);
+// 2. Torrent Swarm Coordination Endpoints
+router.post('/swarm/heartbeat', handleSwarmHeartbeat);
+router.get('/swarm/:code/status', getSwarmStatus);
+router.post('/swarm/:code/request-piece', requestPiece);
+router.get('/swarm/:code/pending-pieces', getPendingPieceRequests);
+router.post('/swarm/:code/serve-piece', servePiece);
 
-// User's own shared files route
+// 3. User's Own Shared Files
 router.get('/my-shared', getMySharedFiles);
 
-// File metadata route for download page
+// 4. File Metadata Route for Download Page Display
 router.get('/:code', lookupLimiter, getFileMetadata);
 
-// File download stream/redirect route
-router.get('/:code/download', lookupLimiter, downloadFile);
-
-// Delete file route
+// 5. Delete File Route
 router.delete('/:code', deleteFile);
 
 module.exports = router;

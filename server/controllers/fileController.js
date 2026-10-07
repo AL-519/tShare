@@ -1,15 +1,28 @@
 const path = require('path');
-const fs = require('fs');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const File = require('../models/File');
-const storageService = require('../services/storage.services');
 const { generateUniqueCode } = require('../services/codeGenerator');
 
 /**
- * Native HTTP cookie helpers to set and clear cookies cleanly
+ * Valid format for short codes (alphanumeric uppercase, 4 to 12 chars)
+ */
+const CODE_REGEX = /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4,12}$/i;
+
+/**
+ * Helper to normalize and validate code input to prevent ReDoS / injection
+ */
+const sanitizeCode = (raw) => {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim().toUpperCase();
+  return CODE_REGEX.test(trimmed) ? trimmed : null;
+};
+
+/**
+ * Native HTTP cookie helpers with production security flags
  */
 const setCookieHeader = (res, name, value, options = {}) => {
+  const isProd = process.env.NODE_ENV === 'production';
   let cookieStr = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; Path=/; SameSite=Lax`;
   if (options.expires) {
     cookieStr += `; Expires=${options.expires.toUTCString()}`;
@@ -19,6 +32,9 @@ const setCookieHeader = (res, name, value, options = {}) => {
   }
   if (options.httpOnly !== false) {
     cookieStr += `; HttpOnly`;
+  }
+  if (isProd) {
+    cookieStr += `; Secure`;
   }
   const prev = res.getHeader('Set-Cookie');
   if (!prev) {
@@ -31,7 +47,11 @@ const setCookieHeader = (res, name, value, options = {}) => {
 };
 
 const clearCookieHeader = (res, name) => {
-  let cookieStr = `${encodeURIComponent(name)}=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; HttpOnly`;
+  const isProd = process.env.NODE_ENV === 'production';
+  let cookieStr = `${encodeURIComponent(name)}=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; HttpOnly; SameSite=Lax`;
+  if (isProd) {
+    cookieStr += `; Secure`;
+  }
   const prev = res.getHeader('Set-Cookie');
   if (!prev) {
     res.setHeader('Set-Cookie', cookieStr);
@@ -47,44 +67,124 @@ const clearCookieHeader = (res, name) => {
  * Max allowed duration is 24 hours. Default is 10 minutes.
  */
 const parseDurationMs = (durationStr) => {
-  const defaultMs = 10 * 60 * 1000; // 10 minutes default
-  if (!durationStr) return defaultMs;
+  if (!durationStr || durationStr === 'undefined' || durationStr === 'never' || durationStr === 'none') {
+    return null; // Link never expires (undefined)
+  }
 
-  const match = String(durationStr).trim().match(/^(\d+)\s*(m|min|minutes?|h|hours?|d|days?)$/i);
-  if (!match) return defaultMs;
+  const str = String(durationStr).trim().toLowerCase();
+  if (str === '1w' || str === '7d' || str === 'week') return 7 * 24 * 60 * 60 * 1000;
+  if (str === '1m' || str === '1mo' || str === '30d' || str === 'month') return 30 * 24 * 60 * 60 * 1000;
+
+  const match = str.match(/^(\d+)\s*(m|min|minutes?|h|hours?|d|days?|w|weeks?|mo|months?)$/i);
+  if (!match) return 60 * 60 * 1000; // 1 hour default
 
   const val = parseInt(match[1], 10);
   const unit = match[2].toLowerCase();
 
-  let ms = defaultMs;
-  if (unit.startsWith('m')) {
-    ms = val * 60 * 1000;
+  if (unit.startsWith('m') && !unit.startsWith('mo')) {
+    return val * 60 * 1000;
   } else if (unit.startsWith('h')) {
-    ms = val * 60 * 60 * 1000;
+    return val * 60 * 60 * 1000;
   } else if (unit.startsWith('d')) {
-    ms = val * 24 * 60 * 60 * 1000;
+    return val * 24 * 60 * 60 * 1000;
+  } else if (unit.startsWith('w')) {
+    return val * 7 * 24 * 60 * 60 * 1000;
+  } else if (unit.startsWith('mo')) {
+    return val * 30 * 24 * 60 * 60 * 1000;
   }
 
-  const maxMs = 24 * 60 * 60 * 1000; // Server-side 24h cap enforcement
-  return Math.min(ms, maxMs);
+  return 60 * 60 * 1000;
 };
 
-// In-memory registry for peer stream relays (code -> pending recipient requests)
-const pendingStreamRequests = new Map(); // requestId -> { code, res, req, createdAt }
+
+// ============================================================================
+// TORRENT SWARM IN-MEMORY STATE REGISTRY
+// ============================================================================
+
+/**
+ * Active Seeders Map:
+ * Map<fileCode, Map<clientId, { lastSeen: timestamp }>>
+ */
+const activeSeeders = new Map();
+
+/**
+ * Pending Piece Requests Map:
+ * Map<requestId, { code, pieceIndex, res, req, createdAt, timeoutHandle }>
+ */
+const pendingPieceRequests = new Map();
+
+/**
+ * Helper: Prune inactive seeders (older than 35s)
+ */
+const pruneInactiveSeeders = (code) => {
+  const codeSeeders = activeSeeders.get(code);
+  if (!codeSeeders) return 0;
+
+  const now = Date.now();
+  for (const [clientId, info] of codeSeeders.entries()) {
+    if (now - info.lastSeen > 35000) {
+      codeSeeders.delete(clientId);
+    }
+  }
+
+  if (codeSeeders.size === 0) {
+    activeSeeders.delete(code);
+    return 0;
+  }
+  return codeSeeders.size;
+};
+
+/**
+ * Helper: Count active seeders for a file code
+ */
+const getSeederCount = (code) => {
+  return pruneInactiveSeeders(code);
+};
+
+// Automatic Memory Garbage Collection Sweep (Runs every 30s)
+setInterval(() => {
+  const now = Date.now();
+  // 1. Purge dead/abandoned pending piece requests older than 25s
+  for (const [reqId, info] of pendingPieceRequests.entries()) {
+    if (now - info.createdAt > 25000) {
+      if (info.timeoutHandle) clearTimeout(info.timeoutHandle);
+      pendingPieceRequests.delete(reqId);
+    }
+  }
+  // 2. Purge stale seeders (> 40s inactive)
+  for (const [code, seederMap] of activeSeeders.entries()) {
+    for (const [clientId, info] of seederMap.entries()) {
+      if (now - info.lastSeen > 40000) {
+        seederMap.delete(clientId);
+      }
+    }
+    if (seederMap.size === 0) {
+      activeSeeders.delete(code);
+    }
+  }
+}, 30000);
+
+// ============================================================================
+// CONTROLLERS
+// ============================================================================
 
 /**
  * Controller: POST /api/files/upload
- * Handle file upload, metadata saving, and set user/file cookies (zero disk usage for device_local)
+ * Zero-RAM torrent metadata registration (Files stored 100% on user device)
  */
 const uploadFile = async (req, res, next) => {
   try {
-    const { duration, storageProvider, password, maxDownloads, fileName, fileSize, mimeType } = req.body;
-
-    const preferredProvider = storageProvider || process.env.STORAGE_PROVIDER || 'device_local';
-
-    if (preferredProvider !== 'device_local' && !req.file) {
-      return res.status(400).json({ success: false, message: 'No file buffer provided for cloud upload.' });
-    }
+    const {
+      duration,
+      password,
+      maxDownloads,
+      fileName,
+      originalName: rawOriginalName,
+      fileSize,
+      size: rawSize,
+      mimeType,
+      pieceSize: clientPieceSize,
+    } = req.body || {};
 
     // 1. Retrieve or generate user identity cookie token
     let uploaderToken = req.cookies ? req.cookies.uploader_token : null;
@@ -95,71 +195,59 @@ const uploadFile = async (req, res, next) => {
       maxAge: 365 * 24 * 60 * 60 * 1000,
     });
 
-    // 2. Extract original filename & metadata
-    const rawName = req.file ? req.file.originalname : (fileName || 'unnamed_file');
-    const originalName = rawName;
-    const sanitizedName = path.basename(originalName).replace(/[^a-zA-Z0-9._-]/g, '_');
-    const resolvedSize = req.file ? req.file.size : (parseInt(fileSize || '0', 10) || 0);
-    const resolvedMimeType = req.file ? req.file.mimetype : (mimeType || 'application/octet-stream');
+    // 2. Extract file metadata
+    const name = (rawOriginalName || fileName || (req.file ? req.file.originalname : 'unnamed_file')).trim();
+    const sanitizedName = path.basename(name).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const size = parseInt(rawSize || fileSize || (req.file ? req.file.size : 0), 10) || 0;
+    const resolvedMimeType = mimeType || (req.file ? req.file.mimetype : 'application/octet-stream');
 
-    // Enforce 200 MB maximum file size limit
-    const maxFileSizeMb = parseInt(process.env.MAX_FILE_SIZE_MB || '200', 10);
-    const maxSizeBytes = maxFileSizeMb * 1024 * 1024;
+    // 3. Compute torrent pieces (Default piece size: 512 KB)
+    const PIECE_SIZE = parseInt(clientPieceSize, 10) || (512 * 1024);
+    const totalPieces = size > 0 ? Math.ceil(size / PIECE_SIZE) : 1;
 
-    if (resolvedSize > maxSizeBytes) {
-      return res.status(400).json({
-        success: false,
-        message: `File size (${(resolvedSize / (1024 * 1024)).toFixed(1)} MB) exceeds maximum allowed limit of ${maxFileSizeMb} MB.`,
-      });
-    }
-
-    // 3. Save file using storage service (zero server disk usage for device_local!)
-    const savedStorage = await storageService.saveFile({
-      buffer: req.file ? req.file.buffer : null,
-      originalName: sanitizedName,
-      provider: preferredProvider,
-    });
-
-    // 4. Compute expiresAt timestamp with 24-hour max cap
+    // 4. Compute expiresAt timestamp (null means never expires / undefined)
     const durationMs = parseDurationMs(duration);
     const createdAt = new Date();
-    const expiresAt = new Date(createdAt.getTime() + durationMs);
+    const expiresAt = durationMs ? new Date(createdAt.getTime() + durationMs) : null;
 
     // 5. Password hash if provided
     let passwordHash = null;
-    if (password && password.trim().length > 0) {
-      passwordHash = await bcrypt.hash(password.trim(), 10);
+    if (password && String(password).trim().length > 0) {
+      passwordHash = await bcrypt.hash(String(password).trim(), 10);
     }
 
-    // 6. Max downloads limit validation
-    let parsedMaxDownloads = null;
-    if (maxDownloads && !isNaN(parseInt(maxDownloads, 10)) && parseInt(maxDownloads, 10) > 0) {
-      parsedMaxDownloads = parseInt(maxDownloads, 10);
-    }
-
-    // 7. Generate unique share code
+    // 6. Generate unique uppercase share code
     const fileCode = await generateUniqueCode();
 
-    // 8. Set per-file cookie that automatically expires at file's expiresAt
-    setCookieHeader(res, `file_owner_${fileCode}`, fileCode, {
-      expires: expiresAt,
-    });
+    // 7. Generate 256-bit cryptographically secure owner secret token (No-login creator verification)
+    const ownerSecretToken = crypto.randomBytes(32).toString('hex');
+    const hashedSecret = crypto.createHash('sha256').update(ownerSecretToken).digest('hex');
 
-    // 9. Create Mongoose DB document
+    // 8. Set HttpOnly owner cookies with cryptographic secret
+    if (expiresAt) {
+      setCookieHeader(res, `file_owner_token_${fileCode}`, ownerSecretToken, { expires: expiresAt });
+      setCookieHeader(res, `file_owner_${fileCode}`, fileCode, { expires: expiresAt });
+    } else {
+      setCookieHeader(res, `file_owner_token_${fileCode}`, ownerSecretToken, { maxAge: 365 * 24 * 60 * 60 * 1000 });
+      setCookieHeader(res, `file_owner_${fileCode}`, fileCode, { maxAge: 365 * 24 * 60 * 60 * 1000 });
+    }
+
+    // 9. Create SQLite database record (Zero server disk file usage)
     const fileRecord = new File({
       code: fileCode,
-      originalName,
+      originalName: name,
       sanitizedName,
       mimeType: resolvedMimeType,
-      size: resolvedSize,
-      storageProvider: savedStorage.storageProvider,
-      filePath: savedStorage.filePath,
-      imagekitFileId: savedStorage.imagekitFileId,
+      size,
+      pieceSize: PIECE_SIZE,
+      totalPieces,
+      storageProvider: 'peer_to_peer',
+      filePath: 'indexeddb',
       uploaderIp: req.ip || req.headers['x-forwarded-for'] || '127.0.0.1',
-      uploaderToken,
+      uploaderToken: hashedSecret,
       createdAt,
       expiresAt,
-      maxDownloads: parsedMaxDownloads,
+      maxDownloads: null,
       passwordHash,
     });
 
@@ -170,21 +258,344 @@ const uploadFile = async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      message: 'File shared successfully using device local storage!',
+      message: 'File registered for peer sharing! Stored safely on your local device.',
       code: fileCode,
+      creatorToken: ownerSecretToken,
       file: {
         code: fileCode,
         originalName: fileRecord.originalName,
         size: fileRecord.size,
         mimeType: fileRecord.mimeType,
+        pieceSize: fileRecord.pieceSize,
+        totalPieces: fileRecord.totalPieces,
         storageProvider: fileRecord.storageProvider,
         createdAt: fileRecord.createdAt,
         expiresAt: fileRecord.expiresAt,
         isPasswordProtected: !!passwordHash,
-        maxDownloads: fileRecord.maxDownloads,
         downloadUrl,
       },
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Controller: POST /api/files/swarm/heartbeat
+ * Active clients (seeders & downloaders with files in IndexedDB) announce the codes they hold
+ */
+const handleSwarmHeartbeat = async (req, res, next) => {
+  try {
+    const { clientId, seedingCodes } = req.body || {};
+    if (!clientId || !Array.isArray(seedingCodes)) {
+      return res.status(400).json({ success: false, message: 'Invalid heartbeat payload' });
+    }
+
+    const now = Date.now();
+    const activeCounts = {};
+    const heldCodesSet = new Set();
+
+    seedingCodes.forEach((rawCode) => {
+      const clean = sanitizeCode(rawCode);
+      if (clean) {
+        heldCodesSet.add(clean);
+        if (!activeSeeders.has(clean)) {
+          activeSeeders.set(clean, new Map());
+        }
+        const seederMap = activeSeeders.get(clean);
+        seederMap.set(clientId, { lastSeen: now });
+        activeCounts[clean] = seederMap.size;
+      }
+    });
+
+    // Check which held codes actually have waiting piece requests to eliminate idle polling
+    const pendingCodes = [];
+    pendingPieceRequests.forEach((val) => {
+      if (heldCodesSet.has(val.code) && !pendingCodes.includes(val.code)) {
+        pendingCodes.push(val.code);
+      }
+    });
+
+    res.json({
+      success: true,
+      activeCounts,
+      pendingCodes,
+      timestamp: now,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Controller: GET /api/files/swarm/:code/status
+ * Check swarm health, active seeder count, and piece metrics
+ */
+const getSwarmStatus = async (req, res, next) => {
+  try {
+    const cleanCode = sanitizeCode(req.params.code);
+    if (!cleanCode) {
+      return res.status(400).json({
+        success: false,
+        error: 'invalid_code',
+        message: 'Invalid file code format. Codes must be 4 to 12 alphanumeric characters.',
+      });
+    }
+
+    const fileRecord = await File.findOne({ code: cleanCode });
+    if (!fileRecord) {
+      return res.status(404).json({
+        success: false,
+        error: 'not_found',
+        message: `File code '${cleanCode}' was not found.`,
+      });
+    }
+
+    if (fileRecord.isDeleted) {
+      return res.status(410).json({
+        success: false,
+        error: 'deleted',
+        isDeleted: true,
+        message: 'This file share was revoked and deleted by its creator.',
+      });
+    }
+
+    if (fileRecord.expiresAt && new Date(fileRecord.expiresAt) <= new Date()) {
+      return res.status(410).json({
+        success: false,
+        error: 'expired',
+        isExpired: true,
+        expiredAt: fileRecord.expiresAt,
+        message: 'This file link has expired and is no longer available.',
+      });
+    }
+
+    if (fileRecord.maxDownloads && fileRecord.downloadCount >= fileRecord.maxDownloads) {
+      return res.status(410).json({
+        success: false,
+        error: 'max_downloads_reached',
+        message: 'Maximum download limit reached for this file.',
+      });
+    }
+
+    const seedersCount = getSeederCount(cleanCode);
+
+    res.json({
+      success: true,
+      code: cleanCode,
+      originalName: fileRecord.originalName,
+      size: fileRecord.size,
+      mimeType: fileRecord.mimeType,
+      pieceSize: fileRecord.pieceSize || 512 * 1024,
+      totalPieces: fileRecord.totalPieces || Math.ceil(fileRecord.size / (512 * 1024)),
+      seedersCount,
+      isPasswordProtected: !!fileRecord.passwordHash,
+      expiresAt: fileRecord.expiresAt,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Controller: POST /api/files/swarm/:code/request-piece
+ * Recipient requests piece `pieceIndex` from an active seeder in the swarm
+ */
+const requestPiece = async (req, res, next) => {
+  try {
+    const cleanCode = sanitizeCode(req.params.code);
+    if (!cleanCode) {
+      return res.status(400).json({
+        success: false,
+        error: 'invalid_code',
+        message: 'Invalid file code format. Codes must be 4 to 12 alphanumeric characters.',
+      });
+    }
+
+    const { pieceIndex, password, clientId } = req.body || {};
+    const pIndex = parseInt(pieceIndex, 10);
+    if (isNaN(pIndex) || pIndex < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'invalid_piece_index',
+        message: 'Invalid pieceIndex specified.',
+      });
+    }
+
+    const fileRecord = await File.findOne({ code: cleanCode });
+    if (!fileRecord) {
+      return res.status(404).json({
+        success: false,
+        error: 'not_found',
+        message: `File code '${cleanCode}' was not found.`,
+      });
+    }
+
+    if (fileRecord.isDeleted) {
+      return res.status(410).json({
+        success: false,
+        error: 'deleted',
+        isDeleted: true,
+        message: 'This file share was revoked and deleted by its creator.',
+      });
+    }
+
+    if (fileRecord.expiresAt && new Date(fileRecord.expiresAt) <= new Date()) {
+      return res.status(410).json({
+        success: false,
+        error: 'expired',
+        isExpired: true,
+        expiredAt: fileRecord.expiresAt,
+        message: 'This file link has expired and is no longer available.',
+      });
+    }
+
+    if (fileRecord.maxDownloads && fileRecord.downloadCount >= fileRecord.maxDownloads) {
+      return res.status(410).json({
+        success: false,
+        error: 'max_downloads_reached',
+        message: 'Maximum download limit reached for this file.',
+      });
+    }
+
+    // Password verification
+    if (fileRecord.passwordHash) {
+      if (!password) {
+        return res.status(401).json({
+          success: false,
+          error: 'password_required',
+          message: 'Password required to download this file.',
+        });
+      }
+      const match = await bcrypt.compare(String(password), fileRecord.passwordHash);
+      if (!match) {
+        return res.status(401).json({
+          success: false,
+          error: 'password_incorrect',
+          message: 'Incorrect password entered.',
+        });
+      }
+    }
+
+    // Check seeders count
+    const seeders = getSeederCount(cleanCode);
+    if (seeders === 0) {
+      return res.status(503).json({
+        success: false,
+        error: 'no_seeders',
+        message: 'No active seeders online for this file. Please wait for an active seeder to connect.',
+        seedersCount: 0,
+      });
+    }
+
+    // Generate unique request ID
+    const requestId = `piece_${cleanCode}_${pIndex}_${crypto.randomBytes(6).toString('hex')}`;
+
+    // Store request in pending piece queue
+    const timeoutHandle = setTimeout(() => {
+      if (pendingPieceRequests.has(requestId)) {
+        pendingPieceRequests.delete(requestId);
+        if (!res.headersSent) {
+          res.status(504).json({
+            success: false,
+            message: `Piece ${pIndex} request timed out waiting for seeder response.`,
+          });
+        }
+      }
+    }, 20000);
+
+    // Clean up immediately if client aborts connection
+    req.on('close', () => {
+      clearTimeout(timeoutHandle);
+      pendingPieceRequests.delete(requestId);
+    });
+
+    pendingPieceRequests.set(requestId, {
+      code: cleanCode,
+      pieceIndex: pIndex,
+      res,
+      req,
+      createdAt: Date.now(),
+      timeoutHandle,
+    });
+
+    // Notify any waiting seeder connection or response will be fulfilled by serve-piece
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Controller: GET /api/files/swarm/:code/pending-pieces
+ * Seeders check which pieces need to be served for this file
+ */
+const getPendingPieceRequests = async (req, res, next) => {
+  try {
+    const cleanCode = sanitizeCode(req.params.code);
+    if (!cleanCode) {
+      return res.status(400).json({ success: false, message: 'Invalid file code format.' });
+    }
+
+    const pending = [];
+    pendingPieceRequests.forEach((val, reqId) => {
+      if (val.code === cleanCode) {
+        pending.push({
+          requestId: reqId,
+          pieceIndex: val.pieceIndex,
+        });
+      }
+    });
+
+    res.json({
+      success: true,
+      pendingRequests: pending.slice(0, 10), // Batch up to 10 pieces
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Controller: POST /api/files/swarm/:code/serve-piece
+ * Seeder submits piece binary/base64 chunk to fulfill a pending piece request
+ */
+const servePiece = async (req, res, next) => {
+  try {
+    const cleanCode = sanitizeCode(req.params.code);
+    const { requestId, pieceIndex, pieceBase64, isLastPiece } = req.body || {};
+
+    if (!requestId || !pieceBase64) {
+      return res.status(400).json({ success: false, message: 'Missing requestId or pieceBase64 data.' });
+    }
+
+    const pending = pendingPieceRequests.get(requestId);
+    if (!pending) {
+      return res.status(404).json({ success: false, message: 'Piece request expired or already fulfilled.' });
+    }
+
+    clearTimeout(pending.timeoutHandle);
+    pendingPieceRequests.delete(requestId);
+
+    const chunkBuffer = Buffer.from(pieceBase64, 'base64');
+
+    if (!pending.res.headersSent) {
+      pending.res.setHeader('Content-Type', 'application/octet-stream');
+      pending.res.setHeader('Content-Length', chunkBuffer.length);
+      pending.res.setHeader('X-Piece-Index', pieceIndex);
+      pending.res.send(chunkBuffer);
+    }
+
+    // Increment download count if final piece was successfully fulfilled
+    if (isLastPiece) {
+      File.findOne({ code: cleanCode, isDeleted: false }).then((fileRecord) => {
+        if (fileRecord) {
+          fileRecord.downloadCount += 1;
+          fileRecord.save();
+        }
+      }).catch((err) => console.error('[Swarm DownloadCount Error]', err));
+    }
+
+    res.json({ success: true, message: 'Piece served successfully.' });
   } catch (error) {
     next(error);
   }
@@ -196,19 +607,52 @@ const uploadFile = async (req, res, next) => {
  */
 const getFileMetadata = async (req, res, next) => {
   try {
-    const { code } = req.params;
-    const codeQuery = { $regex: new RegExp(`^${code.trim()}$`, 'i') };
-    const fileRecord = await File.findOne({ code: codeQuery, isDeleted: false });
-
-    if (!fileRecord || fileRecord.checkIsExpired()) {
-      return res.status(404).json({
+    const cleanCode = sanitizeCode(req.params.code);
+    if (!cleanCode) {
+      return res.status(400).json({
         success: false,
-        message: 'File not found, expired, or has reached maximum download limit.',
-        isExpired: true,
+        error: 'invalid_code',
+        message: 'Invalid file code format. Codes must be 4 to 12 alphanumeric characters.',
       });
     }
 
-    const isPasswordProtected = !!fileRecord.passwordHash;
+    const fileRecord = await File.findOne({ code: cleanCode });
+    if (!fileRecord) {
+      return res.status(404).json({
+        success: false,
+        error: 'not_found',
+        message: `File code '${cleanCode}' was not found. Please verify the code or request a new link from the sender.`,
+      });
+    }
+
+    if (fileRecord.isDeleted) {
+      return res.status(410).json({
+        success: false,
+        error: 'deleted',
+        isDeleted: true,
+        message: 'This file share was revoked and deleted by its creator.',
+      });
+    }
+
+    if (fileRecord.expiresAt && new Date(fileRecord.expiresAt) <= new Date()) {
+      return res.status(410).json({
+        success: false,
+        error: 'expired',
+        isExpired: true,
+        expiredAt: fileRecord.expiresAt,
+        message: 'This file link has expired and is no longer available.',
+      });
+    }
+
+    if (fileRecord.maxDownloads && fileRecord.downloadCount >= fileRecord.maxDownloads) {
+      return res.status(410).json({
+        success: false,
+        error: 'max_downloads_reached',
+        message: 'This file has reached its maximum download limit and is no longer accessible.',
+      });
+    }
+
+    const seedersCount = getSeederCount(cleanCode);
 
     res.json({
       success: true,
@@ -217,12 +661,14 @@ const getFileMetadata = async (req, res, next) => {
         originalName: fileRecord.originalName,
         size: fileRecord.size,
         mimeType: fileRecord.mimeType,
+        pieceSize: fileRecord.pieceSize || (512 * 1024),
+        totalPieces: fileRecord.totalPieces || Math.ceil(fileRecord.size / (512 * 1024)),
         storageProvider: fileRecord.storageProvider,
         createdAt: fileRecord.createdAt,
         expiresAt: fileRecord.expiresAt,
         downloadCount: fileRecord.downloadCount,
-        maxDownloads: fileRecord.maxDownloads,
-        isPasswordProtected,
+        isPasswordProtected: !!fileRecord.passwordHash,
+        seedersCount,
       },
     });
   } catch (error) {
@@ -231,250 +677,101 @@ const getFileMetadata = async (req, res, next) => {
 };
 
 /**
- * Controller: GET /api/files/:code/download
- * Validate expiry, verify password, increment download count, and serve/stream file
- */
-const downloadFile = async (req, res, next) => {
-  try {
-    const { code } = req.params;
-    const providedPassword = req.query.password || req.headers['x-file-password'];
-
-    const codeQuery = { $regex: new RegExp(`^${code.trim()}$`, 'i') };
-    const fileRecord = await File.findOne({ code: codeQuery, isDeleted: false });
-
-    if (!fileRecord || fileRecord.checkIsExpired()) {
-      return res.status(410).json({
-        success: false,
-        message: 'This file link has expired or reached its maximum download limit.',
-        isExpired: true,
-      });
-    }
-
-    // Password validation if protected
-    if (fileRecord.passwordHash) {
-      if (!providedPassword) {
-        return res.status(401).json({
-          success: false,
-          message: 'Password required to download this file.',
-          isPasswordRequired: true,
-        });
-      }
-
-      const isMatch = await bcrypt.compare(String(providedPassword), fileRecord.passwordHash);
-      if (!isMatch) {
-        return res.status(401).json({
-          success: false,
-          message: 'Incorrect password entered.',
-        });
-      }
-    }
-
-    // Serve file based on storage provider
-    if (fileRecord.storageProvider === 'imagekit' && fileRecord.filePath.startsWith('http')) {
-      const isInline = req.query.inline === 'true';
-
-      if (isInline) {
-        // Open/Play in new tab via direct CDN redirect (Inline Preview: DO NOT increment download count)
-        return res.redirect(fileRecord.filePath);
-      } else {
-        // Direct File Download: Increment download count
-        fileRecord.downloadCount += 1;
-        if (fileRecord.maxDownloads !== null && fileRecord.downloadCount >= fileRecord.maxDownloads) {
-          fileRecord.isDeleted = true;
-        }
-        await fileRecord.save();
-
-        // Force attachment download with Content-Disposition header
-        const https = require('https');
-        const http = require('http');
-        const httpModule = fileRecord.filePath.startsWith('https') ? https : http;
-
-        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileRecord.originalName)}"`);
-        res.setHeader('Content-Type', fileRecord.mimeType || 'application/octet-stream');
-        if (fileRecord.size) res.setHeader('Content-Length', fileRecord.size);
-
-        return httpModule.get(fileRecord.filePath, (stream) => {
-          stream.pipe(res);
-        }).on('error', () => {
-          const fallbackUrl = fileRecord.filePath.includes('?') 
-            ? `${fileRecord.filePath}&ik-attachment=true` 
-            : `${fileRecord.filePath}?ik-attachment=true`;
-          res.redirect(fallbackUrl);
-        });
-      }
-    } else if (fileRecord.storageProvider === 'device_local') {
-      // Device local storage transfer
-      const requestId = 'req_' + crypto.randomBytes(8).toString('hex');
-      const isInline = req.query.inline === 'true';
-      const disposition = isInline ? 'inline' : 'attachment';
-
-      console.log(`[Server Download] Initiated device_local peer stream for file code '${code}' (requestId: '${requestId}', isInline: ${isInline})`);
-
-      res.setHeader('Content-Disposition', `${disposition}; filename="${encodeURIComponent(fileRecord.originalName)}"`);
-      res.setHeader('Content-Type', fileRecord.mimeType || 'application/octet-stream');
-      if (fileRecord.size) res.setHeader('Content-Length', fileRecord.size);
-
-      // Register stream recipient
-      pendingStreamRequests.set(requestId, {
-        code: fileRecord.code,
-        res,
-        fileRecord,
-        isInline,
-        createdAt: Date.now(),
-      });
-
-      // Cleanup timeout after 25s if uploader device doesn't stream chunks
-      setTimeout(() => {
-        if (pendingStreamRequests.has(requestId)) {
-          const reqInfo = pendingStreamRequests.get(requestId);
-          pendingStreamRequests.delete(requestId);
-          console.warn(`[Server Download TIMEOUT] Stream request '${requestId}' for code '${code}' timed out (uploader device offline).`);
-          if (!reqInfo.res.headersSent) {
-            reqInfo.res.status(503).json({
-              success: false,
-              message: 'Uploader device is offline. Please ask the uploader to keep their browser tab open.',
-            });
-          }
-        }
-      }, 25000);
-
-    } else {
-      // Legacy local disk file streaming
-      const localFilePath = path.resolve(fileRecord.filePath);
-
-      if (!fs.existsSync(localFilePath)) {
-        return res.status(404).json({
-          success: false,
-          message: 'Physical file missing from server storage.',
-        });
-      }
-
-      const isInline = req.query.inline === 'true';
-      if (!isInline) {
-        fileRecord.downloadCount += 1;
-        if (fileRecord.maxDownloads !== null && fileRecord.downloadCount >= fileRecord.maxDownloads) {
-          fileRecord.isDeleted = true;
-        }
-        await fileRecord.save();
-      }
-
-      const disposition = isInline ? 'inline' : 'attachment';
-      res.setHeader('Content-Disposition', `${disposition}; filename="${encodeURIComponent(fileRecord.originalName)}"`);
-      res.setHeader('Content-Type', fileRecord.mimeType || 'application/octet-stream');
-      
-      const fileStream = fs.createReadStream(localFilePath);
-      fileStream.pipe(res);
-    }
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Controller: GET /api/files/stream-check/:code
- * Uploader browser checks for pending download requests for its locally hosted file
- */
-const checkStreamRequest = async (req, res, next) => {
-  try {
-    const { code } = req.params;
-    const pending = [];
-
-    pendingStreamRequests.forEach((val, reqId) => {
-      if (val.code.toLowerCase() === code.trim().toLowerCase()) {
-        pending.push({ requestId: reqId });
-      }
-    });
-
-    if (pending.length > 0) {
-      console.log(`[Server StreamCheck] Code '${code}' has ${pending.length} pending recipient download request(s).`);
-    }
-
-    res.json({ success: true, pendingRequests: pending });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Controller: POST /api/files/stream-chunk/:code
- * Uploader browser sends file chunks to pipe directly to recipient HTTP stream
- */
-const receiveStreamChunk = async (req, res, next) => {
-  try {
-    const { code } = req.params;
-    const { requestId, chunkBase64, isLastChunk } = req.body;
-
-    const streamEntry = pendingStreamRequests.get(requestId);
-
-    if (!streamEntry) {
-      console.warn(`[Server StreamChunk WARN] Received chunk for unknown or expired requestId '${requestId}'.`);
-      return res.status(404).json({ success: false, message: 'Recipient download stream expired or cancelled.' });
-    }
-
-    if (chunkBase64) {
-      const buffer = Buffer.from(chunkBase64, 'base64');
-      streamEntry.res.write(buffer);
-    }
-
-    if (isLastChunk) {
-      console.log(`[Server StreamChunk SUCCESS] Final chunk received for '${code}' (requestId: '${requestId}'). Ending response.`);
-      streamEntry.res.end();
-      
-      // Increment download count ONLY for actual downloads (not inline previews)
-      const fileRecord = streamEntry.fileRecord;
-      if (fileRecord && !streamEntry.isInline) {
-        fileRecord.downloadCount += 1;
-        if (fileRecord.maxDownloads !== null && fileRecord.downloadCount >= fileRecord.maxDownloads) {
-          fileRecord.isDeleted = true;
-        }
-        await fileRecord.save();
-      }
-
-      pendingStreamRequests.delete(requestId);
-    }
-
-    res.json({ success: true });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
  * Controller: DELETE /api/files/:code
- * Early manual file deletion by uploader. Also removes the corresponding file cookie.
+ * Early manual file deletion by uploader
  */
 const deleteFile = async (req, res, next) => {
   try {
-    const { code } = req.params;
-    const codeQuery = { $regex: new RegExp(`^${code.trim()}$`, 'i') };
-    const fileRecord = await File.findOne({ code: codeQuery, isDeleted: false });
-
-    if (!fileRecord) {
-      return res.status(404).json({ success: false, message: 'File code not found.' });
+    const cleanCode = sanitizeCode(req.params.code);
+    if (!cleanCode) {
+      return res.status(400).json({
+        success: false,
+        error: 'invalid_code',
+        message: 'Invalid file code format.',
+      });
     }
 
-    // Verify ownership via uploaderToken or file_owner cookie
-    const uploaderToken = req.cookies ? req.cookies.uploader_token : null;
-    const fileOwnerCookie = req.cookies ? req.cookies[`file_owner_${fileRecord.code}`] : null;
-    
-    const isOwner = (uploaderToken && fileRecord.uploaderToken === uploaderToken) || fileOwnerCookie === fileRecord.code;
+    const fileRecord = await File.findOne({ code: cleanCode });
+    if (!fileRecord) {
+      return res.status(404).json({
+        success: false,
+        error: 'not_found',
+        message: `File code '${cleanCode}' does not exist.`,
+      });
+    }
+
+    if (fileRecord.isDeleted) {
+      return res.status(410).json({
+        success: false,
+        error: 'already_deleted',
+        message: `File code '${cleanCode}' has already been deleted.`,
+      });
+    }
+
+    // Verify ownership with maximum cryptographic security (No login required)
+    const cookies = req.cookies || {};
+    const headerToken = req.headers['x-creator-token'];
+    const authHeader = req.headers['authorization'];
+    const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : null;
+    const cookieToken = cookies[`file_owner_token_${fileRecord.code}`];
+    const uploaderSessionToken = cookies.uploader_token;
+
+    // Highest priority: 256-bit cryptographic bearer token
+    const candidateToken = headerToken || bearerToken || cookieToken;
+
+    let isOwner = false;
+    if (candidateToken && fileRecord.uploaderToken) {
+      try {
+        const hashedCandidate = crypto.createHash('sha256').update(candidateToken).digest('hex');
+        if (hashedCandidate.length === fileRecord.uploaderToken.length) {
+          isOwner = crypto.timingSafeEqual(
+            Buffer.from(hashedCandidate, 'utf-8'),
+            Buffer.from(fileRecord.uploaderToken, 'utf-8')
+          );
+        }
+        if (!isOwner && candidateToken.length === fileRecord.uploaderToken.length) {
+          isOwner = crypto.timingSafeEqual(
+            Buffer.from(candidateToken, 'utf-8'),
+            Buffer.from(fileRecord.uploaderToken, 'utf-8')
+          );
+        }
+      } catch (err) {
+        console.error('[Delete Auth Error]', err);
+      }
+    }
+
+    // Secondary fallback: uploader general session token
+    if (!isOwner && uploaderSessionToken && fileRecord.uploaderToken) {
+      try {
+        if (uploaderSessionToken.length === fileRecord.uploaderToken.length) {
+          isOwner = crypto.timingSafeEqual(
+            Buffer.from(uploaderSessionToken, 'utf-8'),
+            Buffer.from(fileRecord.uploaderToken, 'utf-8')
+          );
+        }
+      } catch (_) {}
+    }
 
     if (!isOwner) {
       return res.status(403).json({
         success: false,
-        message: 'You do not have permission to delete this file.',
+        message: 'Access denied: Valid cryptographic creator authorization required to delete this file.',
       });
     }
 
-    await storageService.deleteFile(fileRecord);
-    await File.deleteOne({ _id: fileRecord._id });
+    // Delete record from DB
+    await File.deleteOne({ id: fileRecord.id });
 
-    // Clear file cookie at the exact same time file is removed
+    // Clean up from swarm registry
+    activeSeeders.delete(cleanCode);
+
+    // Clear file cookies
+    clearCookieHeader(res, `file_owner_token_${fileRecord.code}`);
     clearCookieHeader(res, `file_owner_${fileRecord.code}`);
 
     res.json({
       success: true,
-      message: `File code '${code}' successfully deleted.`,
+      message: `File code '${cleanCode}' successfully deleted.`,
     });
   } catch (error) {
     next(error);
@@ -483,7 +780,7 @@ const deleteFile = async (req, res, next) => {
 
 /**
  * Controller: GET /api/files/my-shared
- * Fetch files uploaded/shared by THIS user only using cookies & token
+ * Fetch files uploaded/shared by current user
  */
 const getMySharedFiles = async (req, res, next) => {
   try {
@@ -491,20 +788,19 @@ const getMySharedFiles = async (req, res, next) => {
     const uploaderToken = req.cookies ? req.cookies.uploader_token : null;
     const cookies = req.cookies || {};
 
-    // Extract file codes from file_owner_* cookies
     const fileOwnerCodes = [];
     Object.keys(cookies).forEach((key) => {
-      if (key.startsWith('file_owner_')) {
-        fileOwnerCodes.push(cookies[key]);
+      if (key.startsWith('file_owner_token_')) {
+        const clean = sanitizeCode(key.replace('file_owner_token_', ''));
+        if (clean) fileOwnerCodes.push(clean);
+      } else if (key.startsWith('file_owner_')) {
+        const clean = sanitizeCode(key.replace('file_owner_', ''));
+        if (clean) fileOwnerCodes.push(clean);
       }
     });
 
     if (!uploaderToken && fileOwnerCodes.length === 0) {
-      return res.json({
-        success: true,
-        count: 0,
-        files: [],
-      });
+      return res.json({ success: true, count: 0, files: [] });
     }
 
     const queryConditions = [];
@@ -517,31 +813,39 @@ const getMySharedFiles = async (req, res, next) => {
 
     const activeFiles = await File.find({
       isDeleted: false,
-      expiresAt: { $gt: now },
-      $or: queryConditions,
+      $or: [
+        { expiresAt: null },
+        { expiresAt: { $gt: now } },
+      ],
+      $and: [
+        { $or: queryConditions },
+      ],
     }).sort({ createdAt: -1 });
 
     const activeCodesSet = new Set(activeFiles.map((f) => f.code));
 
-    // Clear cookies for any expired or deleted files at the exact same time
-    fileOwnerCodes.forEach((code) => {
-      if (!activeCodesSet.has(code)) {
-        clearCookieHeader(res, `file_owner_${code}`);
+    // Clear stale cookies
+    fileOwnerCodes.forEach((c) => {
+      if (!activeCodesSet.has(c)) {
+        clearCookieHeader(res, `file_owner_token_${c}`);
+        clearCookieHeader(res, `file_owner_${c}`);
       }
     });
 
     const formatted = activeFiles.map((f) => ({
-      id: f._id,
+      id: f._id || f.id,
       code: f.code,
       originalName: f.originalName,
       size: f.size,
       mimeType: f.mimeType,
+      pieceSize: f.pieceSize || 512 * 1024,
+      totalPieces: f.totalPieces || Math.ceil(f.size / (512 * 1024)),
       storageProvider: f.storageProvider,
       createdAt: f.createdAt,
       expiresAt: f.expiresAt,
       downloadCount: f.downloadCount,
-      maxDownloads: f.maxDownloads,
       isPasswordProtected: !!f.passwordHash,
+      seedersCount: getSeederCount(f.code),
     }));
 
     res.json({
@@ -557,10 +861,11 @@ const getMySharedFiles = async (req, res, next) => {
 module.exports = {
   uploadFile,
   getFileMetadata,
-  downloadFile,
   deleteFile,
   getMySharedFiles,
-  checkStreamRequest,
-  receiveStreamChunk,
+  handleSwarmHeartbeat,
+  getSwarmStatus,
+  requestPiece,
+  getPendingPieceRequests,
+  servePiece,
 };
-

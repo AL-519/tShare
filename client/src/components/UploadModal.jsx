@@ -12,6 +12,7 @@ export const UploadModal = ({ isUploading, progress, uploadResult, onClose, onTo
 
   const code = uploadResult?.code || '';
   const downloadUrl = uploadResult?.file?.downloadUrl || `${window.location.origin}/download/${code}`;
+  const file = uploadResult?.file;
 
   const copyToClipboard = (text, isCode = true) => {
     navigator.clipboard.writeText(text);
@@ -27,8 +28,8 @@ export const UploadModal = ({ isUploading, progress, uploadResult, onClose, onTo
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
-      <div className="relative w-full max-w-lg glass-panel rounded-3xl p-6 sm:p-8 shadow-2xl border border-indigo-500/30 overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in overflow-y-auto">
+      <div className="relative w-full max-w-lg glass-panel rounded-3xl p-6 sm:p-8 shadow-2xl border border-indigo-500/30 overflow-hidden my-8">
         
         {/* Decorative background glow */}
         <div className="absolute -top-24 -right-24 w-48 h-48 bg-indigo-600/20 rounded-full blur-3xl pointer-events-none"></div>
@@ -37,7 +38,7 @@ export const UploadModal = ({ isUploading, progress, uploadResult, onClose, onTo
         {!isUploading && (
           <button
             onClick={onClose}
-            className="absolute top-5 right-5 p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+            className="absolute top-5 right-5 p-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/80 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -76,33 +77,35 @@ export const UploadModal = ({ isUploading, progress, uploadResult, onClose, onTo
             </div>
 
             <h3 className="font-bold text-xl text-slate-100 mb-2">
-              Encrypting & Uploading File...
+              Preparing Local Share...
             </h3>
             <p className="text-sm text-slate-400 max-w-xs">
-              Please wait while your file is securely transferred and assigned a self-destruct code.
+              Saving file safely on your device for instant peer sharing.
             </p>
           </div>
         )}
 
         {/* SUCCESS STATE */}
         {!isUploading && uploadResult && (
-          <div className="py-2">
-            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold w-fit mb-4">
-              <ShieldCheck className="w-4 h-4" />
-              <span>Upload Complete & Encrypted</span>
+          <div className="py-2 space-y-6">
+            <div>
+              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold w-fit mb-3">
+                <ShieldCheck className="w-4 h-4" />
+                <span>Ready to Share (Direct Device Seeding)</span>
+              </div>
+
+              <h3 className="font-extrabold text-2xl text-slate-900 dark:text-slate-100 mb-1 flex items-center gap-2">
+                Your Share Code <Sparkles className="w-5 h-5 text-amber-500 dark:text-amber-400" />
+              </h3>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                Give this code to the recipient or send them the download link.
+              </p>
             </div>
 
-            <h3 className="font-extrabold text-2xl text-slate-100 mb-1 flex items-center gap-2">
-              Your File Code is Ready <Sparkles className="w-5 h-5 text-amber-400" />
-            </h3>
-            <p className="text-sm text-slate-400 mb-6">
-              Share this code or download link. Anyone with the code can retrieve the file before it expires.
-            </p>
-
             {/* Prominent File Code Box */}
-            <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-indigo-950/80 to-purple-950/80 border border-indigo-500/40 text-center flex flex-col items-center justify-center">
-              <span className="text-xs uppercase font-bold tracking-widest text-indigo-300 mb-1">
-                File Sharing Code
+            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-indigo-50/90 dark:from-indigo-950/80 via-slate-50/90 dark:via-slate-900 to-purple-50/90 dark:to-purple-950/80 border border-indigo-200 dark:border-indigo-500/40 text-center flex flex-col items-center justify-center shadow-xs">
+              <span className="text-xs uppercase font-bold tracking-widest text-indigo-600 dark:text-indigo-300 mb-1">
+                6-Character Access Code
               </span>
               <div className="text-4xl sm:text-5xl font-extrabold tracking-widest font-mono text-gradient mb-3">
                 {code}
@@ -111,7 +114,7 @@ export const UploadModal = ({ isUploading, progress, uploadResult, onClose, onTo
               <div className="flex flex-wrap justify-center gap-3 w-full">
                 <button
                   onClick={() => copyToClipboard(code, true)}
-                  className="flex-1 min-w-[140px] px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 transition-all"
+                  className="flex-1 min-w-[130px] px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 transition-all cursor-pointer"
                 >
                   {copiedCode ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                   <span>{copiedCode ? 'Copied Code!' : 'Copy Code'}</span>
@@ -119,7 +122,7 @@ export const UploadModal = ({ isUploading, progress, uploadResult, onClose, onTo
 
                 <button
                   onClick={() => copyToClipboard(downloadUrl, false)}
-                  className="flex-1 min-w-[140px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold text-xs flex items-center justify-center gap-2 transition-all"
+                  className="flex-1 min-w-[130px] px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-xs cursor-pointer"
                 >
                   {copiedLink ? <Check className="w-4 h-4" /> : <LinkIcon className="w-4 h-4" />}
                   <span>{copiedLink ? 'Copied Link!' : 'Copy Link'}</span>
@@ -127,10 +130,10 @@ export const UploadModal = ({ isUploading, progress, uploadResult, onClose, onTo
 
                 <button
                   onClick={() => setShowQR(!showQR)}
-                  className={`px-3 py-2.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                  className={`px-3 py-2.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
                     showQR
                       ? 'bg-purple-600 text-white border-purple-500'
-                      : 'bg-slate-800 hover:bg-slate-700 text-purple-400 border-purple-500/30'
+                      : 'bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700 text-purple-600 dark:text-purple-400 border-purple-200 dark:border-purple-500/30'
                   }`}
                   title="Toggle QR Code"
                 >
@@ -142,7 +145,7 @@ export const UploadModal = ({ isUploading, progress, uploadResult, onClose, onTo
 
             {/* QR Code Container */}
             {showQR && (
-              <div className="mb-6 p-4 rounded-2xl bg-white flex flex-col items-center justify-center animate-fade-in shadow-xl">
+              <div className="p-4 rounded-2xl bg-white flex flex-col items-center justify-center animate-fade-in shadow-xl">
                 <QRCodeSVG value={downloadUrl} size={160} level="H" />
                 <p className="text-xs text-slate-700 font-medium mt-2">
                   Scan with mobile camera to download instantly
@@ -150,33 +153,33 @@ export const UploadModal = ({ isUploading, progress, uploadResult, onClose, onTo
               </div>
             )}
 
-            {/* File Info Summary */}
-            <div className="rounded-xl bg-slate-900/60 p-3 border border-slate-800 text-xs text-slate-400 space-y-1.5 mb-6">
-              <div className="flex justify-between">
-                <span>File Name:</span>
-                <span className="font-medium text-slate-200 truncate max-w-[200px]">
-                  {uploadResult.file?.originalName}
+            {/* File Details Summary */}
+            <div className="rounded-xl bg-slate-100/80 dark:bg-slate-900/60 p-3.5 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 space-y-2">
+              <div className="flex justify-between items-center">
+                <span>File:</span>
+                <span className="font-medium text-slate-900 dark:text-slate-200 truncate max-w-[220px]">
+                  {file?.originalName}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between items-center">
                 <span>Size:</span>
-                <span className="font-medium text-slate-200">
-                  {formatBytes(uploadResult.file?.size)}
+                <span className="font-medium text-slate-900 dark:text-slate-200">
+                  {formatBytes(file?.size)}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between items-center">
                 <span>Expires At:</span>
-                <span className="font-medium text-amber-400">
-                  {new Date(uploadResult.file?.expiresAt).toLocaleString()}
+                <span className="font-medium text-amber-600 dark:text-amber-400">
+                  {file?.expiresAt ? new Date(file.expiresAt).toLocaleString() : 'Never (Permanent link)'}
                 </span>
               </div>
             </div>
 
             <button
               onClick={onClose}
-              className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm transition-colors border border-slate-700"
+              className="w-full py-3.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-semibold text-sm transition-colors border border-slate-200 dark:border-slate-700 shadow-xs cursor-pointer"
             >
-              Done & Close
+              Done
             </button>
           </div>
         )}

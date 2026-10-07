@@ -1,0 +1,14 @@
+{
+  "name": "tempvault",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TempVault — Peer-to-Peer File Transfer Web Application",
+  "scripts": {
+    "build": "npm run build --prefix client",
+    "start": "node server/index.js",
+    "dev": "npm run build && node server/index.js",
+    "server": "node server/index.js",
+    "client": "npm run dev --prefix client",
+    "dev:server": "npm run dev --prefix server"
+  }
+}

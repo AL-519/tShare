@@ -8,8 +8,7 @@ const ACCESS_LOG_PATH = path.join(LOGS_DIR, 'access.log');
 const ERROR_LOG_PATH = path.join(LOGS_DIR, 'error.log');
 
 /**
- * Parse a log line formatted as:
- * [2026-08-13T10:47:52.895Z] POST /api/files/stream-chunk/XmaBeX 500 4ms - ::1 "Mozilla/5.0 ..."
+ * Parse a log line safely
  */
 const parseLogLine = (line) => {
   if (!line || !line.trim()) return null;
@@ -33,48 +32,48 @@ const parseLogLine = (line) => {
 };
 
 /**
- * Archive log file to MongoDB in batches and clear the file safely
+ * Archive log file to SQLite database asynchronously in batches and clear the file safely
  */
 const archiveFileToDB = async (filePath, logType) => {
-  if (!fs.existsSync(filePath)) return 0;
-
-  const content = fs.readFileSync(filePath, 'utf-8');
-  if (!content || !content.trim()) return 0;
-
-  const lines = content.split('\n').filter((line) => line.trim().length > 0);
-  if (lines.length === 0) return 0;
-
-  const entries = lines.map(parseLogLine).filter(Boolean);
-
-  // Batch insert into MongoDB (1,000 items per document) to stay well under MongoDB 16MB document limit
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < entries.length; i += BATCH_SIZE) {
-    const chunk = entries.slice(i, i + BATCH_SIZE);
-    await SystemLog.create({
-      logType,
-      entries: chunk,
-      entryCount: chunk.length,
-      archivedAt: new Date(),
-    });
-  }
-
-  // Safely truncate file to 0 bytes without destroying file stream handles
   try {
-    fs.truncateSync(filePath, 0);
+    if (!fs.existsSync(filePath)) return 0;
+
+    const content = await fs.promises.readFile(filePath, 'utf-8');
+    if (!content || !content.trim()) return 0;
+
+    const lines = content.split('\n').filter((line) => line.trim().length > 0);
+    if (lines.length === 0) return 0;
+
+    const entries = lines.map(parseLogLine).filter(Boolean);
+
+    // Batch insert into SQLite (1,000 items per document)
+    const BATCH_SIZE = 1000;
+    for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+      const chunk = entries.slice(i, i + BATCH_SIZE);
+      await SystemLog.create({
+        logType,
+        entries: chunk,
+        entryCount: chunk.length,
+        archivedAt: new Date(),
+      });
+    }
+
+    // Truncate file asynchronously to 0 bytes
+    await fs.promises.truncate(filePath, 0);
+
+    console.log(`[LogArchiver] Archived ${entries.length} ${logType} log entries to SQLite and cleared ${path.basename(filePath)}.`);
+    return entries.length;
   } catch (err) {
-    fs.writeFileSync(filePath, '', 'utf-8');
+    console.error(`[LogArchiver Error] Failed archiving ${logType} logs:`, err.message);
+    return 0;
   }
-
-  console.log(`[LogArchiver] Archived ${entries.length} ${logType} log entries to MongoDB and cleared ${path.basename(filePath)}.`);
-
-  return entries.length;
 };
 
 /**
  * Perform log archival task
  */
-const archiveLogsToMongoDB = async () => {
-  console.log(`[LogArchiver] Executing 12-hour scheduled log archival to MongoDB...`);
+const archiveLogsToSQLite = async () => {
+  console.log(`[LogArchiver] Executing 12-hour scheduled log archival to SQLite...`);
   try {
     const accessCount = await archiveFileToDB(ACCESS_LOG_PATH, 'access');
     const errorCount = await archiveFileToDB(ERROR_LOG_PATH, 'error');
@@ -85,17 +84,16 @@ const archiveLogsToMongoDB = async () => {
 };
 
 // Initialize 12-hour cron job schedule
-// Schedule: '0 */12 * * *' (Every 12 hours)
 const initLogArchiverCron = () => {
   const cronSchedule = '0 */12 * * *'; // Runs every 12 hours
   console.log(`[LogArchiver Job] Scheduling log archiver with pattern: '${cronSchedule}' (Every 12 hours)`);
 
   cron.schedule(cronSchedule, () => {
-    archiveLogsToMongoDB();
+    archiveLogsToSQLite();
   });
 };
 
 module.exports = {
   initLogArchiverCron,
-  archiveLogsToMongoDB,
+  archiveLogsToSQLite,
 };

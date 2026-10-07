@@ -16,8 +16,13 @@ const errorLogStream = fs.createWriteStream(path.join(LOGS_DIR, 'error.log'), { 
  * Formats: [TIMESTAMP] METHOD URL STATUS DURATION_MS - IP USER_AGENT
  */
 const requestLogger = (req, res, next) => {
-  // Skip verbose polling requests to keep log files readable
-  if (req.originalUrl && req.originalUrl.includes('/stream-check/')) {
+  // Skip verbose polling requests to conserve CPU and avoid disk write thrashing
+  if (
+    req.originalUrl &&
+    (req.originalUrl.includes('/stream-check/') ||
+     req.originalUrl.includes('/swarm/heartbeat') ||
+     req.originalUrl.includes('/pending-pieces'))
+  ) {
     return next();
   }
 

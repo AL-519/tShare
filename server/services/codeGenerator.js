@@ -1,8 +1,8 @@
 const crypto = require('crypto');
 const File = require('../models/File');
 
-// Custom alphabet excluding visually ambiguous characters: 0, O, I, l, 1
-const ALPHABET = '23456789abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ';
+// Custom uppercase alphabet excluding visually ambiguous characters: 0, O, I, L, 1
+const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 
 /**
  * Generate a random short code of specified length using crypto random bytes
@@ -25,18 +25,18 @@ const generateRandomCode = (length = 6) => {
  */
 const generateUniqueCode = async () => {
   let attempts = 0;
-  const maxAttempts = 10;
+  const maxAttempts = 12;
   
   while (attempts < maxAttempts) {
     const code = generateRandomCode(6);
     try {
-      const existing = await File.findOne({ code, isDeleted: false });
+      const existing = await File.findOne({ code });
       if (!existing) {
         return code;
       }
     } catch (err) {
       // If DB is unreachable during code generation, return unique timestamped code as fallback
-      return `${code}-${Date.now().toString(36).slice(-3)}`;
+      return `${code}${Date.now().toString(36).slice(-2).toUpperCase()}`;
     }
     attempts++;
   }
@@ -48,4 +48,5 @@ const generateUniqueCode = async () => {
 module.exports = {
   generateRandomCode,
   generateUniqueCode,
+  ALPHABET,
 };

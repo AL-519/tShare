@@ -4,26 +4,20 @@ const storageService = require('../services/storage.services');
 
 /**
  * Cleanup Service:
- * Finds expired files in MongoDB or files marked as deleted/exhausted.
- * Deletes the physical file (from local uploads directory or ImageKit CDN)
- * and then purges the database record.
+ * Finds expired files in SQLite or files marked as deleted/exhausted.
+ * Deletes any physical storage assets (if local upload or ImageKit CDN)
+ * and then purges the SQLite database record.
  */
 const performCleanupSweep = async () => {
   const now = new Date();
   console.log(`[Cron Cleanup] Running scheduled file cleanup sweep at ${now.toISOString()}`);
 
   try {
-    // 1. Find files where expiresAt is past, or download count reached max limit, or isDeleted flag is set
+    // 1. Find files where link has expired (expiresAt <= now) or marked as deleted by creator
     const expiredFiles = await File.find({
       $or: [
         { expiresAt: { $lte: now } },
         { isDeleted: true },
-        {
-          $and: [
-            { maxDownloads: { $ne: null } },
-            { $expr: { $gte: ['$downloadCount', '$maxDownloads'] } },
-          ],
-        },
       ],
     });
 
@@ -37,11 +31,11 @@ const performCleanupSweep = async () => {
     // 2. Iterate through expired files and delete physical assets & DB documents
     for (const fileRecord of expiredFiles) {
       try {
-        // Delete physical file from storage (Local disk or ImageKit)
+        // Delete physical file from storage (Local disk or ImageKit if applicable)
         await storageService.deleteFile(fileRecord);
 
-        // Remove document from MongoDB database
-        await File.deleteOne({ _id: fileRecord._id });
+        // Remove document from SQLite database
+        await File.deleteOne({ id: fileRecord.id || fileRecord._id });
         console.log(`[Cron Cleanup] Successfully purged record for code: ${fileRecord.code}`);
       } catch (err) {
         console.error(`[Cron Cleanup Error] Failed to purge file record ${fileRecord.code}:`, err.message);

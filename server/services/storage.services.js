@@ -198,8 +198,8 @@ async function deleteFile(fileRecord) {
       // Delete from local filesystem if legacy local file exists
       await fs.promises.unlink(fileRecord.filePath);
       console.log(`[Storage] Deleted legacy local file at ${fileRecord.filePath}.`);
-    } else if (fileRecord.storageProvider === 'device_local') {
-      console.log(`[Storage] Device local file record (${fileRecord.code}) removed from DB. Zero server disk usage.`);
+    } else if (fileRecord.storageProvider === 'device_local' || fileRecord.storageProvider === 'peer_to_peer') {
+      console.log(`[Storage] P2P / Device local file record (${fileRecord.code}) removed from DB. Zero server disk usage.`);
     }
   } catch (error) {
     console.error(`[Storage Error] Failed to delete file (${fileRecord.code}):`, error.message);

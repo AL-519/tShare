@@ -29,3 +29,12 @@ yarn-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# SQLite Private Server Database (Strictly Isolated)
+server/data/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db3

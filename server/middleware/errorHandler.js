@@ -17,6 +17,7 @@ const errorHandler = (err, req, res, next) => {
 
   res.status(statusCode).json({
     success: false,
+    error: err.code || (statusCode === 404 ? 'not_found' : 'server_error'),
     message: err.message || 'An unexpected server error occurred.',
     stack: process.env.NODE_ENV === 'production' ? null : err.stack,
   });

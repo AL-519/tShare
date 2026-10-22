@@ -18,11 +18,13 @@ class FileRecord {
     this.filePath = row.filePath || 'indexeddb';
     this.uploaderIp = row.uploaderIp || '127.0.0.1';
     this.uploaderToken = row.uploaderToken || null;
+    this.creatorTokenHash = row.creatorTokenHash || null;
     this.createdAt = row.createdAt ? new Date(row.createdAt) : new Date();
     this.expiresAt = row.expiresAt ? new Date(row.expiresAt) : null;
     this.downloadCount = Number(row.downloadCount) || 0;
     this.maxDownloads = row.maxDownloads !== null && row.maxDownloads !== undefined ? Number(row.maxDownloads) : null;
     this.passwordHash = row.passwordHash || null;
+    this.fileHash = row.fileHash || null;
     this.isDeleted = Boolean(row.isDeleted);
   }
 
@@ -63,10 +65,12 @@ class FileRecord {
           filePath = ?,
           uploaderIp = ?,
           uploaderToken = ?,
+          creatorTokenHash = ?,
           expiresAt = ?,
           downloadCount = ?,
           maxDownloads = ?,
           passwordHash = ?,
+          fileHash = ?,
           isDeleted = ?
         WHERE id = ?
       `);
@@ -81,10 +85,12 @@ class FileRecord {
         this.filePath,
         this.uploaderIp,
         this.uploaderToken,
+        this.creatorTokenHash,
         this.expiresAt ? this.expiresAt.toISOString() : null,
         this.downloadCount,
         this.maxDownloads,
         this.passwordHash,
+        this.fileHash,
         this.isDeleted ? 1 : 0,
         this.id
       );
@@ -94,9 +100,9 @@ class FileRecord {
         INSERT INTO files (
           code, originalName, sanitizedName, mimeType, size,
           pieceSize, totalPieces, storageProvider, filePath,
-          uploaderIp, uploaderToken, createdAt, expiresAt,
-          downloadCount, maxDownloads, passwordHash, isDeleted
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          uploaderIp, uploaderToken, creatorTokenHash, createdAt, expiresAt,
+          downloadCount, maxDownloads, passwordHash, fileHash, isDeleted
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const result = stmt.run(
         this.code,
@@ -110,11 +116,13 @@ class FileRecord {
         this.filePath,
         this.uploaderIp,
         this.uploaderToken,
+        this.creatorTokenHash,
         this.createdAt ? this.createdAt.toISOString() : new Date().toISOString(),
         this.expiresAt ? this.expiresAt.toISOString() : null,
         this.downloadCount,
         this.maxDownloads,
         this.passwordHash,
+        this.fileHash,
         this.isDeleted ? 1 : 0
       );
       this.id = result.lastInsertRowid;
@@ -150,6 +158,10 @@ class File {
     if (query.uploaderToken !== undefined) {
       conditions.push('uploaderToken = ?');
       params.push(query.uploaderToken);
+    }
+    if (query.creatorTokenHash !== undefined) {
+      conditions.push('creatorTokenHash = ?');
+      params.push(query.creatorTokenHash);
     }
     if (query._id !== undefined || query.id !== undefined) {
       conditions.push('id = ?');
@@ -209,6 +221,10 @@ class File {
                 orConditions.push('uploaderToken = ?');
                 params.push(cond.uploaderToken);
               }
+              if (cond.creatorTokenHash) {
+                orConditions.push('creatorTokenHash = ?');
+                params.push(cond.creatorTokenHash);
+              }
               if (cond.code && cond.code.$in && Array.isArray(cond.code.$in) && cond.code.$in.length > 0) {
                 const placeholders = cond.code.$in.map(() => '?').join(',');
                 orConditions.push(`UPPER(code) IN (${placeholders})`);
@@ -231,6 +247,10 @@ class File {
         whereParts.push('uploaderToken = ?');
         params.push(query.uploaderToken);
       }
+      if (query.creatorTokenHash) {
+        whereParts.push('creatorTokenHash = ?');
+        params.push(query.creatorTokenHash);
+      }
 
       const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
       const stmt = db.prepare(`SELECT * FROM files ${whereClause} ${sortSql}`);
@@ -238,18 +258,31 @@ class File {
       return rows.map((r) => new FileRecord(r));
     };
 
-    // Return a chainable Promise supporting .sort()
-    const promise = Promise.resolve().then(() => execute());
-    promise.sort = (sortObj) => {
-      if (sortObj && sortObj.createdAt === -1) {
-        sortSql = 'ORDER BY datetime(createdAt) DESC, id DESC';
-      } else if (sortObj && sortObj.createdAt === 1) {
-        sortSql = 'ORDER BY datetime(createdAt) ASC, id ASC';
-      }
-      return Promise.resolve().then(() => execute());
+    // Return a thenable query object that only executes ONCE when awaited or .then() is called
+    const queryObj = {
+      sort(sortObj) {
+        if (sortObj && sortObj.createdAt === -1) {
+          sortSql = 'ORDER BY datetime(createdAt) DESC, id DESC';
+        } else if (sortObj && sortObj.createdAt === 1) {
+          sortSql = 'ORDER BY datetime(createdAt) ASC, id ASC';
+        }
+        return this;
+      },
+      then(resolve, reject) {
+        try {
+          const result = execute();
+          resolve(result);
+        } catch (err) {
+          if (reject) reject(err);
+          else throw err;
+        }
+      },
+      catch(reject) {
+        return this.then(undefined, reject);
+      },
     };
 
-    return promise;
+    return queryObj;
   }
 
   /**

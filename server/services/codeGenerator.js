@@ -35,8 +35,8 @@ const generateUniqueCode = async () => {
         return code;
       }
     } catch (err) {
-      // If DB is unreachable during code generation, return unique timestamped code as fallback
-      return `${code}${Date.now().toString(36).slice(-2).toUpperCase()}`;
+      // If DB is unreachable during code generation, append 2 random ALPHABET characters as fallback
+      return `${code}${generateRandomCode(2)}`;
     }
     attempts++;
   }

@@ -1,9 +1,10 @@
 {
-  "name": "tempvault",
+  "name": "tshare",
   "version": "1.0.0",
   "private": true,
-  "description": "TempVault — Peer-to-Peer File Transfer Web Application",
+  "description": "TShare — Peer-to-Peer File Transfer Web Application",
   "scripts": {
+    "install:all": "npm install --prefix server && npm install --prefix client",
     "build": "npm run build --prefix client",
     "start": "node server/index.js",
     "dev": "npm run build && node server/index.js",

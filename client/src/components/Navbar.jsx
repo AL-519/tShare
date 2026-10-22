@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Share2, Sun, Moon, Download } from 'lucide-react';
+import { Share2, Sun, Moon, Download, Power } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
+import { ShutdownConfirmModal } from './ShutdownConfirmModal';
 
 export const Navbar = () => {
   const location = useLocation();
   const { toggleTheme, isDark } = useTheme();
+  const [isShutdownModalOpen, setIsShutdownModalOpen] = useState(false);
 
   return (
     <header className="sticky top-0 z-40 w-full glass-panel border-b border-slate-200/80 dark:border-slate-800/80 bg-white/75 dark:bg-slate-950/85 backdrop-blur-md transition-colors duration-300">
@@ -18,7 +20,7 @@ export const Navbar = () => {
           </div>
           <div>
             <span className="font-extrabold text-xl tracking-tight text-gradient">
-              TempVault
+              TShare
             </span>
           </div>
         </Link>
@@ -39,6 +41,17 @@ export const Navbar = () => {
             ) : (
               <Moon className="w-4 h-4 text-indigo-600 transition-transform duration-300 -rotate-12 hover:rotate-0" />
             )}
+          </button>
+
+          {/* Server Shutdown Confirmation Button */}
+          <button
+            id="server-shutdown-btn"
+            onClick={() => setIsShutdownModalOpen(true)}
+            className="p-2 rounded-xl bg-slate-100/90 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-700/80 text-rose-500 hover:text-rose-600 dark:hover:text-rose-400 hover:border-rose-500/40 transition-all duration-200 hover:scale-105 active:scale-95 shadow-sm cursor-pointer"
+            title="Shut Down Server (Confirm with prompt)"
+            aria-label="Shut Down Server"
+          >
+            <Power className="w-4 h-4" />
           </button>
 
           {/* Navigation Links */}
@@ -71,6 +84,12 @@ export const Navbar = () => {
         </div>
 
       </div>
+
+      {/* Server Shutdown Confirmation Modal */}
+      <ShutdownConfirmModal
+        isOpen={isShutdownModalOpen}
+        onClose={() => setIsShutdownModalOpen(false)}
+      />
     </header>
   );
 };

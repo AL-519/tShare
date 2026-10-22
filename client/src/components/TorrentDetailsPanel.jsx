@@ -264,7 +264,7 @@ export const TorrentDetailsPanel = ({
             <div className="flex justify-between items-baseline gap-2">
               <span className="text-slate-500 dark:text-slate-400 shrink-0">Created By:</span>
               <span className="font-mono text-indigo-600 dark:text-indigo-300 text-[11px] truncate">
-                TempVault WebTorrent Swarm
+                TShare WebTorrent Swarm
               </span>
             </div>
 

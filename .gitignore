@@ -5,24 +5,30 @@ server/node_modules/
 
 # Production build output
 client/dist/
+dist/
 
 # Environment files
 .env
+.env.*
 .env.example
 *.env
-client/.env
-server/.env
+client/.env*
+server/.env*
 
 # Temporary upload files
+uploads/
+uploads/*
 server/uploads/*
 !server/uploads/.gitkeep
 
 # Logs
+logs/
 *.log
 server/logs/*
 !server/logs/.gitkeep
 npm-debug.log*
 yarn-debug.log*
+pnpm-debug.log*
 
 # System & IDE files
 .DS_Store
@@ -31,7 +37,8 @@ Thumbs.db
 .idea/
 
 # SQLite Private Server Database (Strictly Isolated)
-server/data/
+server/data/*
+!server/data/.gitkeep
 *.sqlite
 *.sqlite3
 *.sqlite-wal

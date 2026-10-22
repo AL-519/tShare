@@ -5,7 +5,7 @@ const ThemeContext = createContext();
 export const ThemeProvider = ({ children }) => {
   const [theme, setThemeState] = useState(() => {
     try {
-      const saved = localStorage.getItem('tempvault_theme');
+      const saved = localStorage.getItem('tshare_theme') || localStorage.getItem('tempvault_theme');
       if (saved === 'dark' || saved === 'light') return saved;
       // Default to modern dark mode
       return 'dark';
@@ -28,7 +28,7 @@ export const ThemeProvider = ({ children }) => {
       if (meta) meta.setAttribute('content', '#f8fafc');
     }
     try {
-      localStorage.setItem('tempvault_theme', theme);
+      localStorage.setItem('tshare_theme', theme);
     } catch (e) {
       console.warn('Could not persist theme in localStorage', e);
     }

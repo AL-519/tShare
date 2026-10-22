@@ -6,25 +6,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     
     <!-- Primary SEO Meta Tags -->
-    <title>TempVault — Peer-to-Peer File Transfer</title>
-    <meta name="title" content="TempVault — Peer-to-Peer File Transfer" />
+    <title>TShare — Peer-to-Peer File Transfer</title>
+    <meta name="title" content="TShare — Peer-to-Peer File Transfer" />
     <meta name="description" content="Secure, direct peer-to-peer file transfer from your device. No file size limits with configurable link expiration." />
-    <meta name="keywords" content="temporary file transfer, p2p file sharing, peer file transfer, secure file transfer, link expiry, private file transfer" />
+    <meta name="keywords" content="tshare, peer file transfer, p2p file sharing, ephemeral file sharing, link expiry, private file transfer" />
     <meta name="robots" content="index, follow" />
     <meta name="theme-color" content="#080c14" />
-    <link rel="canonical" href="http://localhost:5000" />
+    <link rel="canonical" href="http://localhost:21844" />
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="http://localhost:5000" />
-    <meta property="og:title" content="TempVault — Peer-to-Peer File Transfer" />
+    <meta property="og:url" content="http://localhost:21844" />
+    <meta property="og:title" content="TShare — Peer-to-Peer File Transfer" />
     <meta property="og:description" content="Direct browser-to-browser peer file transfer with configurable link expiration. No file size limits." />
-    <meta property="og:site_name" content="TempVault" />
+    <meta property="og:site_name" content="TShare" />
 
     <!-- Twitter Cards -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:url" content="http://localhost:5000" />
-    <meta name="twitter:title" content="TempVault — Peer-to-Peer File Transfer" />
+    <meta name="twitter:url" content="http://localhost:21844" />
+    <meta name="twitter:title" content="TShare — Peer-to-Peer File Transfer" />
     <meta name="twitter:description" content="Direct browser-to-browser peer file transfer with configurable link expiration. No file size limits." />
 
     <!-- JSON-LD Structured Data: WebApplication -->
@@ -32,8 +32,8 @@
     {
       "@context": "https://schema.org",
       "@type": "WebApplication",
-      "name": "TempVault",
-      "url": "http://localhost:5000",
+      "name": "TShare",
+      "url": "http://localhost:21844",
       "description": "Direct peer-to-peer file transfer web application using browser IndexedDB and chunk streaming.",
       "applicationCategory": "UtilitiesApplication",
       "operatingSystem": "All modern browsers",
@@ -53,11 +53,39 @@
       ]
     }
     </script>
-
-    <!-- Google Fonts Inter & JetBrains Mono -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    
+    <!-- ⚡ TShare Lifecycle Auto-Shutdown on Webpage Close -->
+    <script>
+      (function() {
+        var tabId = 'tab_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
+        var es = null;
+        function connectSSE() {
+          try {
+            es = new EventSource('/api/lifecycle/stream?tabId=' + encodeURIComponent(tabId));
+            es.onerror = function() {
+              if (es) { es.close(); es = null; }
+              setTimeout(connectSSE, 2000);
+            };
+          } catch(e) {}
+        }
+        connectSSE();
+        function ping() {
+          fetch('/api/lifecycle/ping?tabId=' + encodeURIComponent(tabId), { method: 'POST' }).catch(function(){});
+        }
+        ping();
+        setInterval(ping, 2500);
+        function closeBeacon() {
+          var url = '/api/lifecycle/close?tabId=' + encodeURIComponent(tabId);
+          if (navigator.sendBeacon) {
+            navigator.sendBeacon(url);
+          } else {
+            fetch(url, { method: 'POST', keepalive: true }).catch(function(){});
+          }
+        }
+        window.addEventListener('beforeunload', closeBeacon);
+        window.addEventListener('pagehide', closeBeacon);
+      })();
+    </script>
   </head>
   <body class="bg-surface-900 text-slate-100 font-sans antialiased min-h-screen selection:bg-indigo-500 selection:text-white">
     <div id="root"></div>

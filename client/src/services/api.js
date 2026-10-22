@@ -23,10 +23,26 @@ export const uploadFile = async (metadata) => {
 /**
  * Get metadata for a file code
  * @param {string} code 
+ * @param {string} [unlockToken]
  */
-export const getFileMetadata = async (code) => {
+export const getFileMetadata = async (code, unlockToken = null) => {
   const cleanCode = String(code).trim().toUpperCase();
-  const response = await api.get(`/${cleanCode}`);
+  const headers = {};
+  if (unlockToken) {
+    headers['X-Unlock-Token'] = unlockToken;
+  }
+  const response = await api.get(`/${cleanCode}`, { headers });
+  return response.data;
+};
+
+/**
+ * Unlock a password-protected folder/container
+ * @param {string} code
+ * @param {string} password
+ */
+export const unlockFile = async (code, password) => {
+  const cleanCode = String(code).trim().toUpperCase();
+  const response = await api.post(`/${cleanCode}/unlock`, { password });
   return response.data;
 };
 
@@ -57,13 +73,18 @@ export const fetchSwarmStatus = async (code) => {
  * @param {number} pieceIndex 
  * @param {string} password 
  * @param {string} clientId 
+ * @param {string} [unlockToken]
  */
-export const requestPiece = async (code, pieceIndex, password = '', clientId = '') => {
+export const requestPiece = async (code, pieceIndex, password = '', clientId = '', unlockToken = null) => {
   const cleanCode = String(code).trim().toUpperCase();
+  const headers = {};
+  if (unlockToken) {
+    headers['X-Unlock-Token'] = unlockToken;
+  }
   const response = await api.post(
     `/swarm/${cleanCode}/request-piece`,
-    { pieceIndex, password, clientId },
-    { responseType: 'arraybuffer' }
+    { pieceIndex, password, clientId, unlockToken },
+    { responseType: 'arraybuffer', headers }
   );
   return response.data; // ArrayBuffer
 };
@@ -90,6 +111,43 @@ export const servePiece = async (code, payload) => {
 };
 
 /**
+ * Send WebRTC signaling payload (offer, answer, candidate) to a peer via server coordinator
+ * @param {string} code
+ * @param {Object} payload { fromClientId, toClientId, signal }
+ * @param {string} [unlockToken]
+ */
+export const sendSwarmSignal = async (code, payload, unlockToken = null) => {
+  const cleanCode = String(code).trim().toUpperCase();
+  const headers = {};
+  if (unlockToken) {
+    headers['X-Unlock-Token'] = unlockToken;
+  }
+  const response = await api.post(`/swarm/${cleanCode}/signal`, { ...payload, unlockToken }, { headers });
+  return response.data;
+};
+
+/**
+ * Fetch pending incoming WebRTC signals for this client
+ * @param {string} code
+ * @param {string} clientId
+ */
+export const fetchSwarmSignals = async (code, clientId) => {
+  const cleanCode = String(code).trim().toUpperCase();
+  const response = await api.get(`/swarm/${cleanCode}/signals`, { params: { clientId } });
+  return response.data;
+};
+
+/**
+ * Notify server that download completed to update swarm download counters
+ * @param {string} code
+ */
+export const notifyDownloadComplete = async (code) => {
+  const cleanCode = String(code).trim().toUpperCase();
+  const response = await api.post(`/swarm/${cleanCode}/complete`);
+  return response.data;
+};
+
+/**
  * Delete file early by code (with cryptographic creator verification)
  * @param {string} code 
  * @param {string} [creatorToken] 
@@ -109,6 +167,14 @@ export const deleteFile = async (code, creatorToken = null) => {
  */
 export const fetchMySharedFiles = async () => {
   const response = await api.get('/my-shared');
+  return response.data;
+};
+
+/**
+ * Explicit manual shutdown of local server
+ */
+export const shutdownServer = async () => {
+  const response = await axios.post('/api/lifecycle/shutdown');
   return response.data;
 };
 

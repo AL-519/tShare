@@ -54,7 +54,7 @@ export const SharedFilesPage = ({ onToast }) => {
   useEffect(() => {
     loadFiles();
     startTorrentSeederService();
-    document.title = 'My Shared Files | TempVault Peer-to-Peer Transfer';
+    document.title = 'My Shared Files | TShare Peer-to-Peer Transfer';
 
     const handleOutsideClick = () => setOpenMenuCode(null);
     const handleKeyDown = (e) => {

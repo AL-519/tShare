@@ -3,7 +3,7 @@ const path = require('path');
 const cron = require('node-cron');
 const SystemLog = require('../models/SystemLog');
 
-const LOGS_DIR = path.resolve(process.cwd(), 'logs');
+const LOGS_DIR = path.resolve(__dirname, '../logs');
 const ACCESS_LOG_PATH = path.join(LOGS_DIR, 'access.log');
 const ERROR_LOG_PATH = path.join(LOGS_DIR, 'error.log');
 
@@ -33,20 +33,37 @@ const parseLogLine = (line) => {
 
 /**
  * Archive log file to SQLite database asynchronously in batches and clear the file safely
+ * Uses atomic rename rotation to prevent loss of incoming logs while archiving
  */
 const archiveFileToDB = async (filePath, logType) => {
   try {
     if (!fs.existsSync(filePath)) return 0;
 
-    const content = await fs.promises.readFile(filePath, 'utf-8');
-    if (!content || !content.trim()) return 0;
+    // 1. Atomically rotate the active log file to a temporary file
+    const tempPath = `${filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+    try {
+      await fs.promises.rename(filePath, tempPath);
+    } catch (renameErr) {
+      // File could be empty, locked, or absent
+      return 0;
+    }
+
+    // 2. Read from the isolated rotated file
+    const content = await fs.promises.readFile(tempPath, 'utf-8');
+    if (!content || !content.trim()) {
+      await fs.promises.unlink(tempPath).catch(() => {});
+      return 0;
+    }
 
     const lines = content.split('\n').filter((line) => line.trim().length > 0);
-    if (lines.length === 0) return 0;
+    if (lines.length === 0) {
+      await fs.promises.unlink(tempPath).catch(() => {});
+      return 0;
+    }
 
     const entries = lines.map(parseLogLine).filter(Boolean);
 
-    // Batch insert into SQLite (1,000 items per document)
+    // 3. Batch insert into SQLite (1,000 items per document)
     const BATCH_SIZE = 1000;
     for (let i = 0; i < entries.length; i += BATCH_SIZE) {
       const chunk = entries.slice(i, i + BATCH_SIZE);
@@ -58,10 +75,10 @@ const archiveFileToDB = async (filePath, logType) => {
       });
     }
 
-    // Truncate file asynchronously to 0 bytes
-    await fs.promises.truncate(filePath, 0);
+    // 4. Safely remove rotated temp file now that it is persisted in SQLite
+    await fs.promises.unlink(tempPath).catch(() => {});
 
-    console.log(`[LogArchiver] Archived ${entries.length} ${logType} log entries to SQLite and cleared ${path.basename(filePath)}.`);
+    console.log(`[LogArchiver] Archived ${entries.length} ${logType} log entries to SQLite and rotated ${path.basename(filePath)}.`);
     return entries.length;
   } catch (err) {
     console.error(`[LogArchiver Error] Failed archiving ${logType} logs:`, err.message);

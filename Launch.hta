@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Starting TShare...</title>
+  <hta:application 
+    id="tshareLauncher"
+    applicationname="TShare"
+    border="none"
+    caption="no"
+    showintaskbar="no"
+    windowstate="minimize"
+    sysmenu="no"
+  />
+  <script type="text/javascript">
+    window.resizeTo(320, 180);
+    window.moveTo(-2000, -2000); // Silent off-screen launch
+
+    try {
+      var shell = new ActiveXObject("WScript.Shell");
+      var fso = new ActiveXObject("Scripting.FileSystemObject");
+
+      // Resolve absolute application directory where Launch.hta resides
+      var scriptPath = unescape(window.location.pathname);
+      if (scriptPath.charAt(0) === '/' || scriptPath.charAt(0) === '\\') {
+        scriptPath = scriptPath.substring(1);
+      }
+      var appDir = fso.GetParentFolderName(scriptPath);
+      if (appDir && fso.FolderExists(appDir)) {
+        shell.CurrentDirectory = appDir;
+      }
+
+      // Detect node executable
+      var nodePath = "node";
+      if (fso.FileExists("C:\\Program Files\\nodejs\\node.exe")) {
+        nodePath = "\"C:\\Program Files\\nodejs\\node.exe\"";
+      } else if (fso.FileExists("C:\\Program Files (x86)\\nodejs\\node.exe")) {
+        nodePath = "\"C:\\Program Files (x86)\\nodejs\\node.exe\"";
+      } else if (fso.FileExists("C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Microsoft\\VisualStudio\\NodeJs\\node.exe")) {
+        nodePath = "\"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Microsoft\\VisualStudio\\NodeJs\\node.exe\"";
+      }
+
+      // Launch TShare Express server in silent background mode (0 = hide window, false = don't wait)
+      shell.Run("cmd.exe /c " + nodePath + " server/index.js", 0, false);
+
+      // Wait 5 seconds for server to bind, then open the default browser to TShare
+      setTimeout(function() {
+        shell.Run("cmd.exe /c start http://localhost:21844", 0, false);
+        window.close();
+      }, 5000);
+
+    } catch (e) {
+      alert("Please ensure Node.js is installed to run TShare.");
+      window.close();
+    }
+  </script>
+</head>
+<body style="background:#080c14;color:#fff;font-family:sans-serif;text-align:center;padding:20px;">
+  <p>Starting TShare...</p>
+</body>
+</html>

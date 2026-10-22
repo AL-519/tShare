@@ -1,0 +1,1 @@
+# Keeps server/data folder tracked in git while ignoring SQLite files

@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TShare — Peer-to-Peer File Transfer</title>
+  <link rel="icon" type="image/svg+xml"
+    href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>" />
+
+  <style>
+    @font-face {
+      font-family: 'Inter';
+      font-style: normal;
+      font-weight: 400 800;
+      font-display: swap;
+      src: local('Inter'), local('Inter Regular'), local('Inter-Regular');
+    }
+
+    @font-face {
+      font-family: 'JetBrains Mono';
+      font-style: normal;
+      font-weight: 500 700;
+      font-display: swap;
+      src: local('JetBrains Mono'), local('JetBrainsMono-Regular');
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: radial-gradient(circle at 50% 15%, #0f172a 0%, #080c14 100%);
+      color: #f8fafc;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    .glow-1 {
+      position: absolute;
+      top: 10%;
+      left: 25%;
+      width: 500px;
+      height: 500px;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, transparent 70%);
+      filter: blur(70px);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .glow-2 {
+      position: absolute;
+      bottom: 15%;
+      right: 25%;
+      width: 450px;
+      height: 450px;
+      background: radial-gradient(circle, rgba(6, 182, 212, 0.12) 0%, transparent 70%);
+      filter: blur(70px);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .card {
+      position: relative;
+      z-index: 10;
+      background: rgba(15, 23, 42, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 28px;
+      padding: 40px 36px;
+      max-width: 540px;
+      width: 100%;
+      box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.8),
+        0 0 0 1px rgba(255, 255, 255, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      text-align: center;
+      transition: all 0.3s ease;
+    }
+
+    .logo-container {
+      width: 68px;
+      height: 68px;
+      margin: 0 auto 18px auto;
+      border-radius: 20px;
+      background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #06b6d4 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      box-shadow: 0 12px 24px -6px rgba(79, 70, 229, 0.4);
+      animation: pulse-logo 3s ease-in-out infinite;
+    }
+
+    @keyframes pulse-logo {
+
+      0%,
+      100% {
+        transform: scale(1);
+        box-shadow: 0 12px 24px -6px rgba(79, 70, 229, 0.4);
+      }
+
+      50% {
+        transform: scale(1.05);
+        box-shadow: 0 16px 32px -4px rgba(6, 182, 212, 0.5);
+      }
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 6px;
+    }
+
+    .tagline {
+      font-size: 13.5px;
+      color: #94a3b8;
+      margin-bottom: 22px;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      border-radius: 9999px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      transition: all 0.3s ease;
+    }
+
+    .status-badge.checking {
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.35);
+      color: #a5b4fc;
+    }
+
+    .status-badge.waiting {
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      color: #fbbf24;
+    }
+
+    .status-badge.connected {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #34d399;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .status-badge.checking .dot {
+      background: #818cf8;
+      animation: blink 1s infinite alternate;
+    }
+
+    .status-badge.waiting .dot {
+      background: #f59e0b;
+      animation: blink 1.2s infinite alternate;
+    }
+
+    .status-badge.connected .dot {
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981;
+    }
+
+    @keyframes blink {
+      from {
+        opacity: 0.3;
+        transform: scale(0.85);
+      }
+
+      to {
+        opacity: 1;
+        transform: scale(1.15);
+      }
+    }
+
+    .lan-callout {
+      background: rgba(6, 182, 212, 0.08);
+      border: 1px solid rgba(6, 182, 212, 0.25);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 20px;
+      text-align: left;
+      font-size: 12.5px;
+      line-height: 1.6;
+      color: #cbd5e1;
+    }
+
+    .lan-callout strong {
+      color: #38bdf8;
+    }
+
+    .lan-url-box {
+      margin-top: 8px;
+      padding: 8px 12px;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid rgba(6, 182, 212, 0.2);
+      border-radius: 10px;
+      font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Segoe UI Mono', Menlo, Consolas, monospace;
+      color: #a5f3fc;
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .endpoints-container {
+      background: rgba(30, 41, 59, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 18px;
+      padding: 16px;
+      margin-bottom: 20px;
+      text-align: left;
+      font-size: 12.5px;
+    }
+
+    .endpoint-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 7px 0;
+    }
+
+    .endpoint-item:not(:last-child) {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .endpoint-label {
+      color: #94a3b8;
+    }
+
+    .endpoint-val {
+      font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Segoe UI Mono', Menlo, Consolas, monospace;
+      color: #e2e8f0;
+      font-size: 12px;
+    }
+
+    .config-box {
+      margin-bottom: 20px;
+      text-align: left;
+    }
+
+    .config-toggle {
+      font-size: 12px;
+      color: #818cf8;
+      background: none;
+      border: none;
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 0;
+      margin-bottom: 8px;
+    }
+
+    .config-input-group {
+      display: flex;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .config-input {
+      flex: 1;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #f8fafc;
+      font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Segoe UI Mono', Menlo, Consolas, monospace;
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 10px;
+      outline: none;
+    }
+
+    .config-input:focus {
+      border-color: #6366f1;
+    }
+
+    .config-save-btn {
+      background: #4f46e5;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    p.description {
+      font-size: 13px;
+      line-height: 1.6;
+      color: #94a3b8;
+      margin-bottom: 22px;
+    }
+
+    .btn-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 13px 20px;
+      border-radius: 14px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #ffffff;
+      background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      box-shadow: 0 8px 16px -4px rgba(79, 70, 229, 0.35);
+    }
+
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #4338ca 0%, #4f46e5 100%);
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 11px 20px;
+      border-radius: 14px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #94a3b8;
+      background: rgba(30, 41, 59, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s ease;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(51, 65, 85, 0.6);
+      color: #ffffff;
+    }
+
+    .footer {
+      margin-top: 24px;
+      font-size: 11.5px;
+      color: #475569;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="glow-1"></div>
+  <div class="glow-2"></div>
+
+  <div class="card">
+    <div class="logo-container">⚡</div>
+    <h1>TShare</h1>
+    <p class="tagline">Direct Peer-to-Peer Ephemeral File Transfer</p>
+
+    <div id="statusBadge" class="status-badge checking">
+      <span class="dot"></span>
+      <span id="statusText">Checking connection...</span>
+    </div>
+
+    <!-- Same-IP / Wi-Fi Network Name Search Callout -->
+    <div class="lan-callout">
+      <strong>🔍 Search "tshare" on Any Device:</strong><br>
+      On any phone, tablet, or laptop on the same Wi-Fi, open your browser and search/type:
+      <div class="lan-url-box" id="lanUrlBox">
+        http://tshare.local:21844 &nbsp;or&nbsp; http://tshare:21844
+      </div>
+      <span style="font-size: 11px; color: #94a3b8; display: block; margin-top: 6px;">
+        mDNS & LLMNR broadcast this local server automatically across your local network.
+      </span>
+    </div>
+
+    <!-- Target Endpoints Status -->
+    <div class="endpoints-container">
+      <div class="endpoint-item">
+        <span class="endpoint-label">🌐 Deployed Cloud Link</span>
+        <span id="deployedVal" class="endpoint-val">Not set</span>
+      </div>
+      <div class="endpoint-item">
+        <span class="endpoint-label">💻 Local Laptop Server</span>
+        <span id="localVal" class="endpoint-val">http://localhost:21844</span>
+      </div>
+    </div>
+
+    <!-- Deployed Server Link Configuration -->
+    <div class="config-box">
+      <button type="button" class="config-toggle" onclick="toggleConfig()">
+        ⚙️ Add / Change Deployed Server URL
+      </button>
+      <div id="configFields" style="display: none;">
+        <div class="config-input-group">
+          <input id="deployedInput" type="url" class="config-input" placeholder="https://tshare.yourdomain.com" />
+          <button type="button" class="config-save-btn" onclick="saveDeployedUrl()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <p id="descText" class="description">
+      Checking connection to TShare...
+    </p>
+
+    <div class="btn-group">
+      <a id="openAppBtn" href="http://localhost:21844" class="btn-primary">
+        <span>Open TShare</span>
+        <span>→</span>
+      </a>
+      <a id="launchAppBtn" href="Launch.hta" class="btn-secondary">
+        <span>⚡ Launch Server via Launch.hta</span>
+      </a>
+      <button id="retryBtn" type="button" class="btn-secondary" onclick="checkAll(true)">
+        <span>🔄 Check Connection Now</span>
+      </button>
+    </div>
+
+    <div class="footer">
+      &copy; TShare • Peer-to-Peer Transfer • <a href="http://localhost:21844/guidelines" style="color:#818cf8; text-decoration:none;">Safety Guidelines</a>
+    </div>
+  </div>
+
+  <script>
+    // ========================================================================
+    // 🔗 DEPLOYED SERVER URL:
+    // If you have deployed TShare to the cloud, set the link here:
+    // Example: const STATIC_DEPLOYED_URL = "https://tshare.yourdomain.com";
+    // ========================================================================
+    const STATIC_DEPLOYED_URL = "";
+
+    const LOCAL_PORT = 21844;
+    const LOCAL_URL = `http://localhost:${LOCAL_PORT}`;
+    const MDNS_URL = `http://tshare.local:${LOCAL_PORT}`;
+
+    // ⚡ Try starting server directly if opened with MSHTA or ActiveX host
+    try {
+      if (typeof ActiveXObject !== "undefined" || window.ActiveXObject) {
+        var shell = new ActiveXObject("WScript.Shell");
+        shell.Run("cmd.exe /c node server/index.js", 0, false);
+      }
+    } catch (_) { }
+
+    function isValidHttpUrl(str) {
+      if (!str || typeof str !== 'string') return false;
+      try {
+        const parsed = new URL(str);
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function isAllowedLaunchHost(str) {
+      if (!str || typeof str !== 'string') return false;
+      try {
+        const parsed = new URL(str);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+        const host = parsed.hostname.toLowerCase();
+        if (host === 'localhost' || host === '127.0.0.1' || host === 'tshare' || host === 'tshare.local') return true;
+        if (/^192\.168\.\d+\.\d+$/.test(host)) return true;
+        if (/^10\.\d+\.\d+\.\d+$/.test(host)) return true;
+        if (/^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(host)) return true;
+        return false;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function getDeployedUrl() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const queryServer = urlParams.get('server');
+      // Protect against open redirect: restrict query parameter auto-redirect to local/LAN endpoints
+      if (queryServer && isAllowedLaunchHost(queryServer)) {
+        return queryServer.replace(/\/+$/, '');
+      }
+      const saved = localStorage.getItem('tshare_deployed_url');
+      if (saved && isValidHttpUrl(saved)) {
+        return saved.replace(/\/+$/, '');
+      }
+      if (STATIC_DEPLOYED_URL && isValidHttpUrl(STATIC_DEPLOYED_URL)) {
+        return STATIC_DEPLOYED_URL.replace(/\/+$/, '');
+      }
+      return '';
+    }
+
+    function toggleConfig() {
+      const el = document.getElementById('configFields');
+      el.style.display = el.style.display === 'none' ? 'block' : 'none';
+      if (el.style.display === 'block') {
+        document.getElementById('deployedInput').value = getDeployedUrl();
+      }
+    }
+
+    function saveDeployedUrl() {
+      const rawVal = document.getElementById('deployedInput').value.trim().replace(/\/+$/, '');
+      if (rawVal && isValidHttpUrl(rawVal)) {
+        localStorage.setItem('tshare_deployed_url', rawVal);
+      } else {
+        localStorage.removeItem('tshare_deployed_url');
+      }
+      toggleConfig();
+      checkAll(true);
+    }
+
+    async function testEndpoint(url) {
+      if (!url || !isValidHttpUrl(url)) return false;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 1200);
+        const res = await fetch(`${url}/api/health`, {
+          method: 'GET',
+          cache: 'no-cache',
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+        return res.ok;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    let isNavigating = false;
+    let pollInterval = null;
+
+    async function checkAll(manual = false) {
+      if (isNavigating) return;
+
+      const badge = document.getElementById('statusBadge');
+      const badgeText = document.getElementById('statusText');
+      const desc = document.getElementById('descText');
+      const openBtn = document.getElementById('openAppBtn');
+      const deployedVal = document.getElementById('deployedVal');
+
+      const deployedUrl = getDeployedUrl();
+      deployedVal.textContent = deployedUrl ? deployedUrl : 'Not configured';
+
+      if (manual) {
+        badge.className = 'status-badge checking';
+        badgeText.textContent = 'Checking connection...';
+      }
+
+      // 1. Check deployed server first if configured
+      if (deployedUrl && isValidHttpUrl(deployedUrl)) {
+        const deployedOk = await testEndpoint(deployedUrl);
+        if (deployedOk) {
+          badge.className = 'status-badge connected';
+          badgeText.textContent = 'Deployed Server Connected!';
+          desc.innerHTML = `Connected to deployed server at <strong>${escapeHtml(deployedUrl)}</strong>.<br>Opening application automatically...`;
+          openBtn.href = deployedUrl;
+
+          isNavigating = true;
+          if (pollInterval) clearInterval(pollInterval);
+          setTimeout(() => { window.location.replace(deployedUrl); }, 350);
+          return;
+        }
+      }
+
+      // 2. Check local server (localhost:21844)
+      const localOk = await testEndpoint(LOCAL_URL);
+      if (localOk) {
+        badge.className = 'status-badge connected';
+        badgeText.textContent = 'Local Server Active!';
+        desc.innerHTML = `Connected to local server on port <strong>${LOCAL_PORT}</strong>.<br>Opening application automatically...`;
+        openBtn.href = LOCAL_URL;
+
+        isNavigating = true;
+        if (pollInterval) clearInterval(pollInterval);
+        setTimeout(() => { window.location.replace(LOCAL_URL); }, 350);
+        return;
+      }
+
+      // 3. Check mDNS name (http://tshare.local:21844)
+      const mdnsOk = await testEndpoint(MDNS_URL);
+      if (mdnsOk) {
+        badge.className = 'status-badge connected';
+        badgeText.textContent = 'TShare Wi-Fi Server Discovered!';
+        desc.innerHTML = `Found TShare laptop server over Wi-Fi.<br>Opening application automatically...`;
+        openBtn.href = MDNS_URL;
+
+        isNavigating = true;
+        if (pollInterval) clearInterval(pollInterval);
+        setTimeout(() => { window.location.replace(MDNS_URL); }, 350);
+        return;
+      }
+
+      // 4. Neither server is connected — stay as it is!
+      badge.className = 'status-badge waiting';
+      badgeText.textContent = 'Waiting for Server';
+      desc.innerHTML = `TShare is not currently active. Double-click <strong>Launch.hta</strong> on your laptop to start the server, or add your deployed link.<br>Devices on the same Wi-Fi can search <strong>tshare</strong> or <strong>tshare.local:${LOCAL_PORT}</strong>.`;
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      checkAll();
+      // Continuous background poll every 2 seconds
+      pollInterval = setInterval(() => checkAll(false), 2000);
+    });
+  </script>
+</body>
+
+</html>

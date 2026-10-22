@@ -3,8 +3,10 @@ node_modules/
 
 # Environment files
 .env
+.env.*
 .env.local
 .env.example
+*.env
 
 # Uploaded temporary files (ignore contents of uploads folder except .gitkeep)
 uploads/*

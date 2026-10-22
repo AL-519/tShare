@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { Dropzone } from '../components/Dropzone';
 import { UploadModal } from '../components/UploadModal';
 import {
@@ -15,7 +15,9 @@ import {
   Layers,
   Zap,
   Activity,
-  CheckCircle2
+  CheckCircle2,
+  AlertTriangle,
+  ShieldAlert
 } from 'lucide-react';
 import { uploadFile } from '../services/api';
 import { saveLocalFile } from '../services/db';
@@ -45,7 +47,7 @@ export const HomePage = ({ onToast }) => {
 
   // Update HTML document title and meta description for SEO
   useEffect(() => {
-    document.title = 'TempVault — Peer-to-Peer File Transfer';
+    document.title = 'TShare — Peer-to-Peer File Transfer';
     const metaDesc = document.querySelector('meta[name="description"]');
     if (metaDesc) {
       metaDesc.setAttribute(
@@ -68,7 +70,15 @@ export const HomePage = ({ onToast }) => {
 
     try {
       setIsUploading(true);
-      setUploadProgress(20);
+      setUploadProgress(15);
+
+      // Compute cryptographic SHA-256 hash of the file for end-to-end swarm integrity verification
+      const arrayBuffer = await selectedFile.arrayBuffer();
+      const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const fileHash = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+
+      setUploadProgress(35);
 
       // 1. Register file metadata on the server
       const result = await uploadFile({
@@ -79,9 +89,10 @@ export const HomePage = ({ onToast }) => {
         password: password.trim() || undefined,
         pieceSize: PIECE_SIZE,
         totalPieces,
+        fileHash,
       });
 
-      setUploadProgress(60);
+      setUploadProgress(65);
 
       // 2. Save file blob to browser IndexedDB so this device can immediately seed pieces
       await saveLocalFile(result.code, selectedFile, {
@@ -90,6 +101,7 @@ export const HomePage = ({ onToast }) => {
         size: selectedFile.size,
         pieceSize: PIECE_SIZE,
         totalPieces,
+        fileHash,
         expiresAt: result.file?.expiresAt,
         creatorToken: result.creatorToken,
         isCreator: true,
@@ -118,9 +130,9 @@ export const HomePage = ({ onToast }) => {
   // Handle Code Search Submit
   const handleSearchSubmit = (e) => {
     e.preventDefault();
-    const cleanCode = searchCode.trim().toUpperCase();
-    if (!cleanCode) {
-      onToast('Please enter a 6-digit file code.', 'error');
+    const cleanCode = searchCode.trim().toUpperCase().replace(/[^23456789ABCDEFGHJKMNPQRSTUVWXYZ]/gi, '');
+    if (!cleanCode || cleanCode.length < 4 || cleanCode.length > 12) {
+      onToast('Please enter a valid 4-12 character file code.', 'error');
       return;
     }
     navigate(`/download/${cleanCode}`);
@@ -313,11 +325,32 @@ export const HomePage = ({ onToast }) => {
             </form>
           </section>
 
+          {/* Safety & Source Verification Caution Statement */}
+          <section className="glass-card rounded-2xl p-5 border border-amber-500/30 bg-amber-500/5 dark:bg-amber-950/20 text-xs space-y-2.5 animate-fade-in" aria-label="Download Safety Notice">
+            <div className="flex items-center gap-2 font-bold text-amber-600 dark:text-amber-400 text-sm">
+              <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+              <span>Safety Caution: Verify File Source</span>
+            </div>
+            <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+              Always ensure you know and trust the source of any file before downloading. Transfers occur directly peer-to-peer and are completely uninspected by the server. Beware of unverified senders, suspicious executables, and malware risks.
+            </p>
+            <div className="pt-0.5">
+              <Link
+                to="/guidelines"
+                id="home-guidelines-link"
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 underline transition-colors"
+              >
+                <span>Read Full Safety Guidelines & Server Disclaimer</span>
+                <span>→</span>
+              </Link>
+            </div>
+          </section>
+
           {/* Info Card: Normal vs Detailed Explanations */}
           <section className="glass-card rounded-2xl p-6 space-y-4 text-xs text-slate-400 border border-slate-800" aria-label="How it works">
             <h3 className="font-bold text-sm text-slate-200 flex items-center gap-2">
               <Shield className="w-4 h-4 text-emerald-400" />
-              How TempVault Swarm Works
+              How TShare Swarm Works
             </h3>
 
             <ul className="space-y-2.5">

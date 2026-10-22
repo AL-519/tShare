@@ -25,11 +25,12 @@ import {
   Eye,
   EyeOff,
   Shield,
-  Zap
+  Zap,
+  UploadCloud
 } from 'lucide-react';
 import { getAllLocalFiles, deleteLocalFile, getLocalFile } from '../services/db';
 import { getFileMetadata } from '../services/api';
-import { downloadTorrentFile, startTorrentSeederService } from '../services/torrentEngine';
+import { downloadTorrentFile, startTorrentSeederService, isUploadAllowed, setUploadAllowed } from '../services/torrentEngine';
 import { formatBytes } from '../components/Dropzone';
 
 export const DownloadsPage = ({ onToast }) => {
@@ -43,6 +44,19 @@ export const DownloadsPage = ({ onToast }) => {
   // Checkbox-selected item IDs (Set of queue item id or completed record code)
   const [selectedIds, setSelectedIds] = useState(new Set());
   const pausedItemIdsRef = useRef(new Set());
+  const [uploadStateRev, setUploadStateRev] = useState(0);
+
+  // Toggle allowing or stopping upload/seeding for a specific file
+  const handleToggleUpload = (code, fileName) => {
+    const currentlyAllowed = isUploadAllowed(code);
+    setUploadAllowed(code, !currentlyAllowed);
+    setUploadStateRev((prev) => prev + 1);
+    if (currentlyAllowed) {
+      onToast(`Upload stopped for '${fileName || code}'. Seeding paused.`, 'info');
+    } else {
+      onToast(`Upload allowed for '${fileName || code}'. Seeding resumed.`, 'success');
+    }
+  };
 
   // Add Download Modal/Card state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -82,7 +96,7 @@ export const DownloadsPage = ({ onToast }) => {
   useEffect(() => {
     loadLocalDownloads();
     startTorrentSeederService();
-    document.title = 'Downloads | TempVault Peer-to-Peer Transfer';
+    document.title = 'Downloads | TShare Peer-to-Peer Transfer';
 
     const handleOutsideClick = () => {
       setContextMenu(null);
@@ -151,6 +165,7 @@ export const DownloadsPage = ({ onToast }) => {
   // ETA Calculation Helper
   const formatETA = (item) => {
     if (item.status === 'completed' || (!item.status && item.code)) return 'Done';
+    if (item.status === 'verifying') return 'Checking';
     if (item.isPaused) return 'Paused';
     if (item.status === 'queued') return 'Waiting';
     if (item.status === 'error') return '-';
@@ -164,6 +179,7 @@ export const DownloadsPage = ({ onToast }) => {
 
   // Download Speed Helper
   const formatDownloadSpeed = (item) => {
+    if (item.status === 'verifying') return 'Verifying';
     if (item.status === 'downloading' && !item.isPaused) {
       return `${formatBytes(item.speed || 0)}/s`;
     }
@@ -175,7 +191,7 @@ export const DownloadsPage = ({ onToast }) => {
   // Upload Speed Helper
   const formatUploadSpeed = (item) => {
     if (item.status === 'completed' || (!item.status && item.code)) {
-      return 'Seeding';
+      return isUploadAllowed(item.code) ? 'Seeding' : 'Stopped';
     }
     return '-';
   };
@@ -438,15 +454,17 @@ export const DownloadsPage = ({ onToast }) => {
         password: item.password,
         signal: abortController.signal,
         isPaused: () => pausedItemIdsRef.current.has(item.id),
-        onProgress: ({ percent, speedBytesPerSec, bitfield }) => {
+        onProgress: ({ percent, speedBytesPerSec, bitfield, isVerifying, status: progressStatus }) => {
           const isItemPaused = pausedItemIdsRef.current.has(item.id);
+          const isItemVerifying = isVerifying || progressStatus === 'verifying';
           setDownloadQueue((prev) =>
             prev.map((q) =>
               q.id === item.id
                 ? {
                     ...q,
-                    progress: Math.max(10, Math.round(percent)),
-                    speed: isItemPaused ? 0 : speedBytesPerSec,
+                    status: isItemVerifying ? 'verifying' : q.status,
+                    progress: isItemVerifying ? 100 : Math.max(10, Math.round(percent)),
+                    speed: isItemPaused || isItemVerifying ? 0 : speedBytesPerSec,
                     bitfield: bitfield ? [...bitfield] : q.bitfield,
                     isPaused: isItemPaused,
                   }
@@ -673,7 +691,7 @@ export const DownloadsPage = ({ onToast }) => {
                 </button>
               </div>
             ) : (
-              <div className="flex-1 overflow-y-auto overflow-x-auto min-h-0">
+              <div className="flex-1 overflow-y-auto overflow-x-auto min-h-0 downloads-table-scroll">
                 <table className="w-full text-xs text-left border-collapse min-w-[700px]">
                   <thead className="sticky top-0 z-10 bg-slate-100/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 uppercase font-semibold text-[11px]">
                     <tr>
@@ -723,6 +741,9 @@ export const DownloadsPage = ({ onToast }) => {
                       if (item.status === 'error') {
                         statusBg = 'bg-rose-500';
                         statusText = 'Error';
+                      } else if (item.status === 'verifying') {
+                        statusBg = 'bg-indigo-500 animate-pulse';
+                        statusText = 'Verifying (100%)';
                       } else if (item.isPaused) {
                         statusBg = 'bg-amber-500';
                         statusText = `Paused (${itemProgress}%)`;
@@ -791,8 +812,21 @@ export const DownloadsPage = ({ onToast }) => {
                           </td>
 
                           {/* 6. Upload Speed */}
-                          <td className="py-2 px-3 text-right font-mono text-slate-600 dark:text-slate-400 text-[11px]">
-                            {formatUploadSpeed(item)}
+                          <td className="py-2 px-3 text-right font-mono text-[11px]">
+                            {item.status === 'completed' ? (
+                              isUploadAllowed(item.code) ? (
+                                <span className="text-emerald-600 dark:text-emerald-400 font-semibold inline-flex items-center gap-1">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                  Seeding
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 dark:text-slate-500 font-normal">
+                                  Stopped
+                                </span>
+                              )
+                            ) : (
+                              <span className="text-slate-400">-</span>
+                            )}
                           </td>
 
                           {/* 7. ETA */}
@@ -868,8 +902,17 @@ export const DownloadsPage = ({ onToast }) => {
                           </td>
 
                           {/* 6. Upload Speed */}
-                          <td className="py-2 px-3 text-right font-mono text-emerald-600 dark:text-emerald-400 text-[11px]">
-                            Seeding
+                          <td className="py-2 px-3 text-right font-mono text-[11px]">
+                            {isUploadAllowed(record.code) ? (
+                              <span className="text-emerald-600 dark:text-emerald-400 font-semibold inline-flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                Seeding
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 dark:text-slate-500 font-normal">
+                                Stopped
+                              </span>
+                            )}
                           </td>
 
                           {/* 7. ETA */}
@@ -1162,6 +1205,32 @@ export const DownloadsPage = ({ onToast }) => {
             <ExternalLink className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             <span>View File Swarm</span>
           </Link>
+
+          {/* Option: Allow / Stop Upload (Seeding) */}
+          {contextMenu.item && contextMenu.item.code && (
+            <button
+              onClick={() => {
+                const item = contextMenu.item;
+                const code = item.code;
+                const name = item.fileName || item.name || code;
+                setContextMenu(null);
+                handleToggleUpload(code, name);
+              }}
+              className="w-full text-left px-3.5 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 cursor-pointer transition-colors"
+            >
+              {isUploadAllowed(contextMenu.item.code) ? (
+                <>
+                  <UploadCloud className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span className="text-amber-600 dark:text-amber-400 font-medium">Stop Upload</span>
+                </>
+              ) : (
+                <>
+                  <UploadCloud className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                  <span className="text-emerald-600 dark:text-emerald-400 font-medium">Allow Upload</span>
+                </>
+              )}
+            </button>
+          )}
 
           <div className="h-px bg-slate-100 dark:bg-slate-800 my-1" />
 

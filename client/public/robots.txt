@@ -2,6 +2,7 @@ User-agent: *
 Allow: /
 Allow: /shared-files
 Allow: /downloads
+Allow: /guidelines
 Disallow: /api/
 
-Sitemap: http://localhost:5000/sitemap.xml
+Sitemap: http://localhost:21844/sitemap.xml

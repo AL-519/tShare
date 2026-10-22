@@ -4,16 +4,27 @@
 const errorHandler = (err, req, res, next) => {
   console.error('[Server Error]', err);
 
+  // Catch malformed JSON body parser SyntaxError
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    return res.status(400).json({
+      success: false,
+      error: 'invalid_json',
+      message: 'Malformed JSON payload provided in request body.',
+    });
+  }
+
   // Multer file size limit error handling
   if (err.code === 'LIMIT_FILE_SIZE') {
     const maxMb = process.env.MAX_FILE_SIZE_MB || 200;
     return res.status(400).json({
       success: false,
+      error: 'limit_file_size',
       message: `File size exceeds the maximum limit of ${maxMb}MB.`,
     });
   }
 
-  const statusCode = res.statusCode && res.statusCode !== 200 ? res.statusCode : 500;
+  // Safe status code resolution
+  const statusCode = (err.status || err.statusCode) || (res.statusCode && res.statusCode !== 200 ? res.statusCode : 500);
 
   res.status(statusCode).json({
     success: false,

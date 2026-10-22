@@ -4,12 +4,46 @@
  * Supports torrent piece slicing on demand.
  */
 
-const DB_NAME = 'TempVaultDeviceStorage';
+const DB_NAME = 'TShareDeviceStorage';
 const DB_VERSION = 2; // Incremented for torrent piece metadata support
 const STORE_NAME = 'local_files';
 
-// In-memory reference cache to avoid thrashing IndexedDB with repeated reads during piece streaming
+// Bounded in-memory LRU cache to prevent browser Out-Of-Memory (OOM) tab crashes
+const MAX_CACHED_BLOBS = 3;
+const MAX_TOTAL_CACHE_BYTES = 50 * 1024 * 1024; // 50 MB threshold for in-memory caching
 const activeBlobCache = new Map();
+
+const pruneBlobCache = () => {
+  let totalBytes = 0;
+  for (const entry of activeBlobCache.values()) {
+    totalBytes += entry.size || 0;
+  }
+
+  while (activeBlobCache.size > MAX_CACHED_BLOBS || totalBytes > MAX_TOTAL_CACHE_BYTES) {
+    let oldestKey = null;
+    let oldestTime = Infinity;
+    for (const [key, entry] of activeBlobCache.entries()) {
+      if (entry.lastAccessed < oldestTime) {
+        oldestTime = entry.lastAccessed;
+        oldestKey = key;
+      }
+    }
+    if (oldestKey) {
+      const removed = activeBlobCache.get(oldestKey);
+      totalBytes -= removed?.size || 0;
+      activeBlobCache.delete(oldestKey);
+    } else {
+      break;
+    }
+  }
+};
+
+const setCacheEntry = (code, entry) => {
+  if ((entry.size || 0) < MAX_TOTAL_CACHE_BYTES) {
+    activeBlobCache.set(code, entry);
+    pruneBlobCache();
+  }
+};
 
 /**
  * Open or initialize IndexedDB instance
@@ -67,7 +101,7 @@ export const saveLocalFile = async (code, blob, metadata = {}) => {
       const request = store.put(record);
 
       request.onsuccess = () => {
-        activeBlobCache.set(cleanCode, {
+        setCacheEntry(cleanCode, {
           blob,
           size: record.size,
           pieceSize: record.pieceSize,
@@ -126,7 +160,60 @@ export const getLocalFile = async (code) => {
 };
 
 /**
- * Slice a specific torrent piece from a locally stored Blob and return as Base64
+ * Slice raw binary ArrayBuffer for WebRTC DataChannel (0 base64 overhead)
+ * @param {string} code 
+ * @param {number} pieceIndex 
+ * @param {number} pieceSize 
+ */
+export const getRawPieceSlice = async (code, pieceIndex, pieceSize = 512 * 1024) => {
+  const cleanCode = String(code || '').trim().toUpperCase();
+  let blob = null;
+  let blobSize = 0;
+
+  if (activeBlobCache.has(cleanCode)) {
+    const cached = activeBlobCache.get(cleanCode);
+    cached.lastAccessed = Date.now();
+    blob = cached.blob;
+    blobSize = cached.size || (blob ? blob.size : 0);
+  }
+
+  if (!blob) {
+    const fileRecord = await getLocalFile(cleanCode);
+    if (!fileRecord || !fileRecord.blob) {
+      throw new Error(`File '${cleanCode}' not found or blob missing in local storage.`);
+    }
+    blob = fileRecord.blob;
+    blobSize = fileRecord.size || blob.size;
+    setCacheEntry(cleanCode, {
+      blob,
+      size: blobSize,
+      pieceSize: fileRecord.pieceSize || pieceSize,
+      totalPieces: fileRecord.totalPieces,
+      lastAccessed: Date.now(),
+    });
+  }
+
+  const start = pieceIndex * pieceSize;
+  const end = Math.min(start + pieceSize, blobSize);
+
+  if (start >= blobSize) {
+    throw new Error(`Piece index ${pieceIndex} out of bounds for file size ${blobSize}.`);
+  }
+
+  const slice = blob.slice(start, end);
+  const isLastPiece = end >= blobSize;
+  const arrayBuffer = await slice.arrayBuffer();
+
+  return {
+    pieceIndex,
+    arrayBuffer,
+    byteLength: slice.size,
+    isLastPiece,
+  };
+};
+
+/**
+ * Slice a specific torrent piece from a locally stored Blob and return as Base64 (Relay fallback)
  * @param {string} code 
  * @param {number} pieceIndex 
  * @param {number} pieceSize 
@@ -152,7 +239,7 @@ export const getPieceSlice = async (code, pieceIndex, pieceSize = 512 * 1024) =>
     }
     blob = fileRecord.blob;
     blobSize = fileRecord.size || blob.size;
-    activeBlobCache.set(cleanCode, {
+    setCacheEntry(cleanCode, {
       blob,
       size: blobSize,
       pieceSize: fileRecord.pieceSize || pieceSize,
